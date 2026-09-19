@@ -13,9 +13,11 @@ cd conta
 ./start.sh
 ```
 
+Your workspace is saved to `conta-data.json` next to the app, written atomically, with the previous thirty versions kept in `history/`. Copy, sync or back up that one file and you have everything. The browser keeps a cached copy too, so a save made while the server is unreachable is not lost; it is pushed the next time the app opens.
+
 The launcher opens **http://localhost:4173** in your browser. Keep the terminal open; **Ctrl+C** stops it. Relaunch with the same command any time. It detects an existing Conta server and reuses it without starting a duplicate.
 
-For a terminal without a graphical browser, use `./start.sh --no-browser`. You can also run `python3 start.py` directly, including on Windows. Always use the same browser profile and URL: `localhost` and `127.0.0.1` have separate browser storage.
+For a terminal without a graphical browser, use `./start.sh --no-browser`. You can also run `python3 start.py` directly, including on Windows. `./start.py --port` and `--data` serve a different port or workspace file, which is how the browser tests run without touching your finances.
 
 The first launch displays labelled sample records. Choose **Start my finances** for an empty workspace. The salary fields start from placeholder values — €1,000 base, age 30, first eligible income year, €9.60 meal card per paid working day — which are not anyone's pay; replace them with yours. IRS Jovem requires confirmation of eligibility and whether your employer applies it. The default 22 meal days/month and 242/year are editable planning assumptions.
 

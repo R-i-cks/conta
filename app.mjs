@@ -26,25 +26,93 @@ function sampleState() {
   sample.holdings=[{id:'demo-etf',name:'Global equity fund · sample',symbol:'DEMO',broker:'Sample broker',kind:'ETF',units:40,cost:400000,price:112.5,updated:today()}];
   return sample;
 }
-let state;
-let storageBlocked = false;
-try { const raw = localStorage.getItem(KEY); state = raw ? validateState(JSON.parse(raw)) : sampleState(); }
-catch { state = emptyState(); storageBlocked = true; }
 let toastTimer;
 function toast(message, persistent=false) {
   clearTimeout(toastTimer); $('#toast').textContent=message; $('#toast').hidden=false;
   if(!persistent) toastTimer=setTimeout(()=>$('#toast').hidden=true,5000);
 }
-function save(next) {
+// The file the launcher keeps next to the app is the record. localStorage is a
+// cache, so a blocked or full browser store no longer costs you your finances.
+let state, etag=null, storageBlocked=false;
+// The cache also records which server version it was last written against, so
+// work saved but not yet accepted by the server survives a reload or a crash.
+const MARK=KEY+':sync';
+const cache = {
+  read() { try { return localStorage.getItem(KEY); } catch { return null; } },
+  write(text) { try { localStorage.setItem(KEY,text); return true; } catch { return false; } },
+  mark(value) { try { localStorage.setItem(MARK,JSON.stringify(value)); } catch {} },
+  readMark() { try { return JSON.parse(localStorage.getItem(MARK)||'null'); } catch { return null; } },
+};
+async function loadRemote() {
+  const response=await fetch('/data',{cache:'no-store'});
+  if(response.status===404) return null;
+  if(!response.ok) throw new Error(`Server answered ${response.status}`);
+  etag=response.headers.get('ETag');
+  return validateState(await response.json());
+}
+let syncing=false,syncAgain=false;
+function queueSync() { cache.mark({etag,dirty:true}); sync(); }
+async function sync() {
+  if(syncing) { syncAgain=true; return; }
+  syncing=true;
   try {
-    const validated=validateState(next);
-    if(storageBlocked) throw new Error('Existing saved data could not be read. Export a backup before resetting this workspace.');
-    localStorage.setItem(KEY,JSON.stringify(validated)); state=validated; return true;
-  } catch(error) { toast('Could not save: ' + error.message, true); return false; }
+    const response=await fetch('/data',{method:'PUT',headers:{'Content-Type':'application/json','If-Match':etag??'*'},body:JSON.stringify(state)});
+    if(response.status===409) {
+      // Another window saved first. Its copy wins; reloading beats overwriting it.
+      const fresh=await loadRemote();
+      if(fresh) { state=fresh; cache.write(JSON.stringify(state)); render(); }
+      toast('Another window had saved newer data, so this workspace was reloaded. Re-enter your last change.',true);
+    } else if(!response.ok) {
+      throw new Error(`Server answered ${response.status}`);
+    } else {
+      etag=(await response.json()).etag;
+      cache.mark({etag,dirty:false});
+    }
+  } catch(error) {
+    toast('Saved in this browser only — the app server did not accept it ('+error.message+'). Keep this tab open and export a backup.',true);
+  } finally {
+    syncing=false;
+    if(syncAgain) { syncAgain=false; queueSync(); }
+  }
+}
+try {
+  state=await loadRemote();
+  const raw=cache.read(),marker=cache.readMark();
+  if(!state) {
+    // Nothing saved on disk yet: adopt this browser's workspace and write it out.
+    state=raw?validateState(JSON.parse(raw)):sampleState();
+    etag='*';
+    queueSync();
+  } else if(raw&&marker&&marker.dirty&&marker.etag===etag) {
+    // This browser holds a save the server never acknowledged, on top of the
+    // version the server still has. Keep the newer work and push it again.
+    state=validateState(JSON.parse(raw));
+    queueSync();
+  }
+} catch(error) {
+  const raw=cache.read();
+  try { state=raw?validateState(JSON.parse(raw)):sampleState(); }
+  catch { state=emptyState(); }
+  storageBlocked=true;
+  toast('Could not read your saved workspace from the app server ('+error.message+'). Export a backup before changing anything.',true);
+}
+function save(next) {
+  let validated;
+  try { validated=validateState(next); }
+  catch(error) { toast('Could not save: '+error.message,true); return false; }
+  if(storageBlocked) { toast('Could not save: your saved workspace could not be read. Export a backup before replacing it.',true); return false; }
+  state=validated;
+  cache.write(JSON.stringify(validated));
+  queueSync();
+  return true;
 }
 function resetState(next) {
-  try { const validated=validateState(next);localStorage.setItem(KEY,JSON.stringify(validated)); state=validated; storageBlocked=false; render(); toast(next.demo?'Sample workspace loaded.':'Your workspace is ready.'); }
-  catch { toast('Browser storage is unavailable. Enable site storage to save your finances.',true); }
+  try {
+    state=validateState(next);
+    cache.write(JSON.stringify(state));
+    storageBlocked=false; queueSync(); render();
+    toast(next.demo?'Sample workspace loaded.':'Your workspace is ready.');
+  } catch(error) { toast('Could not replace this workspace: '+error.message,true); }
 }
 function route() {
   const page=['overview','transactions','accounts','portfolio','planning','loans','tax','settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
@@ -157,7 +225,7 @@ function download(filename,content,type) {const url=URL.createObjectURL(new Blob
 $('#export-csv').addEventListener('click',()=>{download(`conta-transactions-${today()}.csv`,toCSV(filtered()),'text/csv;charset=utf-8');toast('Exported the filtered transactions.');});
 $('#backup').addEventListener('click',()=>{
   try {
-    const content=storageBlocked?localStorage.getItem(KEY):JSON.stringify(state,null,2);
+    const content=storageBlocked?cache.read():JSON.stringify(state,null,2);
     if(content===null) throw new Error('No saved data is available to back up.');
     download(`conta-${storageBlocked?'recovery':'backup'}-${today()}.json`,content,'application/json');
   } catch(error){toast('Could not back up: '+error.message,true);}
@@ -277,6 +345,7 @@ function toggleYouth() {
 function renderPayroll() {
   for(const [key,value] of Object.entries(state.payroll)) {
     const input=payrollForm.elements.namedItem(key);
+    if(!input)continue; // Settings without a field of their own, such as salary destinations.
     if(typeof value==='boolean')input.checked=value;
     else input.value=['gross','mealDaily'].includes(key)?(value/100).toFixed(2):key==='age'&&value===0?'':value;
   }

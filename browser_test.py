@@ -1,17 +1,62 @@
-"""Optional end-to-end checks: run server first, then uv run --with playwright python browser_test.py."""
+"""Optional end-to-end checks: uv run --with playwright python browser_test.py.
+
+Starts its own server on a spare port against a throwaway workspace file, so it
+never reads or overwrites real finances.
+"""
+import atexit
 import json
 import re
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
+PORT = 4273
+BASE = f"http://127.0.0.1:{PORT}"
+WORKSPACE = Path(tempfile.mkdtemp(prefix="conta-test-")) / "conta-data.json"
+
+
+def fresh_workspace():
+    """Each scenario starts from nothing. The file is the shared record now, so
+    clearing browser storage alone no longer isolates a browser context."""
+    WORKSPACE.unlink(missing_ok=True)
+
+
+# start.py steps aside for an existing server, which would hand these tests
+# somebody else's workspace, so claim the port before asking it to serve.
+with socket.socket() as probe:
+    if probe.connect_ex(("127.0.0.1", PORT)) == 0:
+        raise SystemExit(f"port {PORT} is already serving; stop that process and retry")
+
+server = subprocess.Popen(
+    [sys.executable, "-u", str(Path(__file__).parent / "start.py"),
+     "--no-browser", "--port", str(PORT), "--data", str(WORKSPACE)],
+    stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+atexit.register(server.terminate)
+for _attempt in range(100):
+    try:
+        urllib.request.urlopen(BASE + "/health", timeout=1).read()
+        break
+    except (urllib.error.URLError, OSError):
+        time.sleep(0.1)
+else:
+    raise SystemExit(f"test server did not start on {PORT}")
+
+
 with sync_playwright() as p:
     browser = p.chromium.launch()
+    fresh_workspace()
     context = browser.new_context(reduced_motion="reduce", viewport={"width": 1440, "height": 1100})
     page = context.new_page()
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.on("dialog", lambda dialog: dialog.accept())
-    page.goto("http://127.0.0.1:4173", wait_until="networkidle")
+    page.goto(BASE, wait_until="load")
     expect(page.locator("#demo-banner")).to_be_visible()
     expect(page.locator("#recent-list .recent-item")).to_have_count(4)
     assert page.locator(".chart-bar").first.bounding_box()["height"] > 20
@@ -176,22 +221,38 @@ with sync_playwright() as p:
         print(page.evaluate("Array.from(document.querySelectorAll('body *')).filter(e=>e.getBoundingClientRect().right>innerWidth && e.getBoundingClientRect().width).map(e=>[e.tagName,e.id,e.className,e.getBoundingClientRect().right]).slice(0,30)"))
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
+    # A full or blocked browser store is no longer fatal: the file is the record,
+    # so the save must still reach the server.
     page.evaluate("() => { Storage.prototype.setItem = function() { throw new Error('Quota exceeded'); }; }")
     page.locator('nav a[href="#overview"]').click()
     page.locator("#overview .add-transaction").click()
-    page.locator('#transaction-form [name="description"]').fill("Must not save")
+    page.locator('#transaction-form [name="description"]').fill("Saved without the cache")
     page.locator('#transaction-form [name="amount"]').fill("1")
     page.locator("#transaction-form").get_by_role("button", name="Save transaction").click()
-    expect(page.locator("#toast")).to_contain_text("Could not save")
-    expect(page.locator("#transaction-dialog")).to_be_visible()
-    assert len(page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).transactions")) == 1
+    expect(page.locator("#transaction-dialog")).not_to_be_visible()
+    expect(page.locator("#toast")).to_contain_text("Transaction saved")
+    page.wait_for_timeout(400)
+    assert any(t["description"] == "Saved without the cache"
+               for t in json.loads(page.request.get(BASE + "/data").text())["transactions"])
+
+    # A save the server refuses must never look like it succeeded.
+    page.route("**/data", lambda route: route.abort() if route.request.method == "PUT" else route.continue_())
+    page.locator("#overview .add-transaction").click()
+    page.locator('#transaction-form [name="description"]').fill("Server refuses this")
+    page.locator('#transaction-form [name="amount"]').fill("2")
+    page.locator("#transaction-form").get_by_role("button", name="Save transaction").click()
+    expect(page.locator("#toast")).to_contain_text("the app server did not accept it")
+    page.unroute("**/data")
+    assert not any(t["description"] == "Server refuses this"
+                   for t in json.loads(page.request.get(BASE + "/data").text())["transactions"])
     assert not errors, errors
     # Fresh storage for planning and loan scenarios.
+    fresh_workspace()
     context = browser.new_context(reduced_motion="reduce", viewport={"width": 1440, "height": 1050})
     page = context.new_page()
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.on("dialog", lambda dialog: dialog.accept())
-    page.goto("http://127.0.0.1:4173", wait_until="networkidle")
+    page.goto(BASE, wait_until="load")
     page.locator("#start-fresh").click()
     page.locator('nav a[href="#loans"]').click()
     page.locator("#add-loan").click()
@@ -339,11 +400,12 @@ with sync_playwright() as p:
     assert not errors, errors
 
     # Integrated cash, loan payments and the user's insurance PPR, in isolated storage.
+    fresh_workspace()
     context = browser.new_context(reduced_motion="reduce", viewport={"width": 1440, "height": 1050})
     page = context.new_page()
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.on("dialog", lambda dialog: dialog.accept())
-    page.goto("http://127.0.0.1:4173", wait_until="networkidle")
+    page.goto(BASE, wait_until="load")
     page.locator("#start-fresh").click()
     page.locator('nav a[href="#accounts"]').click()
     page.locator("#add-account").click()
@@ -478,7 +540,7 @@ with sync_playwright() as p:
 
     # Source-only files remain inaccessible from the local app server.
     for private_path in ["/.env", "/README.md", "/GITHUB.md", "/start.py"]:
-        assert page.request.get("http://127.0.0.1:4173" + private_path).status == 404
+        assert page.request.get(BASE + private_path).status == 404
     assert not errors, errors
 
     browser.close()

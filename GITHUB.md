@@ -8,7 +8,7 @@ Commit the HTML, CSS, JavaScript modules, Python/shell launchers, tests and docu
 
 Keep real backups, statements, exports and screenshots of personal finances out of the repository. The ignore rules cover Conta's generated filenames, private-data folders, local environment files and common credential files; they cannot identify every renamed financial document. Store any local finance files under `private/`, `backups/` or `statements/` and review the exact staged file list before the first commit.
 
-Browser data lives in localStorage (`conta-v1`), outside this source tree. Sharing source code does not share that browser storage. Backups contain sensitive financial information and are not encrypted. Never include them in issues, tests or a public repository.
+Your finances live in `conta-data.json` and `history/` beside the app, plus a localStorage cache (`conta-v1`). The ignore rules cover the files; check the staged list before the first commit, because unlike browser storage a file in the working tree can be staged by accident. Backups contain sensitive financial information and are not encrypted. Never include them in issues, tests or a public repository.
 
 ## Secrets and future integrations
 

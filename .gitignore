@@ -29,3 +29,8 @@ private/
 statements/
 *.log
 .DS_Store
+
+# Local workspace written by the app server
+conta-data.json
+history/
+.conta-*.tmp
