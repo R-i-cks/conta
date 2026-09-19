@@ -437,6 +437,23 @@ with sync_playwright() as p:
     restored = page.evaluate("JSON.parse(localStorage.getItem('conta-v1'))")
     assert len(restored["investmentPlans"]) == 1 and len(restored["contributions"]) == 1
     assert restored["forecast"]["payDay"] == 28
+    # A later year must reach the inputs too, not only the validators.
+    page.locator('nav a[href="#tax"]').click()
+    payroll = page.locator("#payroll-form")
+    payroll.locator('[name="month"]').fill("2027-03")
+    payroll.get_by_role("button", name="Calculate take-home pay").click()
+    expect(page.locator("#payroll-result")).to_contain_text("2026 tables applied to 2027")
+    page.locator('nav a[href="#planning"]').click()
+    page.locator("#reset-forecast").click()
+    expect(page.locator("#forecast-heading")).to_have_text("Your salary plan · 2027")
+    expect(page.locator("#forecast-start")).to_have_value("2027-03-01")
+    expect(page.locator("#forecast-results tr")).to_have_count(10)
+    expect(page.locator("#forecast-error")).to_be_empty()
+    page.locator("#forecast-end").fill("2028-02-29")
+    page.locator("#forecast-form").get_by_role("button", name="Save salary plan").click()
+    expect(page.locator("#forecast-error")).to_contain_text("one calendar year")
+    assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).forecast.end") == "2027-12-31"
+
     # Source-only files remain inaccessible from the local app server.
     for private_path in ["/.env", "/README.md", "/GITHUB.md", "/start.py"]:
         assert page.request.get("http://127.0.0.1:4173" + private_path).status == 404

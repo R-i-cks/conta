@@ -292,6 +292,7 @@ const monthLabel=month=>new Date(month+'-01T12:00:00').toLocaleDateString('en-GB
 const eurInput=value=>(value/100).toFixed(2);
 function renderPlanning(){
   const p=state.payroll;
+  $('#forecast-heading').textContent=`Your salary plan · ${state.forecast.start.slice(0,4)}`;
   $('#forecast-start').value=state.forecast.start;$('#forecast-end').value=state.forecast.end;$('#forecast-payday').value=state.forecast.payDay;
   $('#forecast-profile').textContent=`${p.payments} payments · ${p.youth&&p.employerApplied?'IRS Jovem applied by employer':'Ordinary withholding'} · ${money(p.mealDaily)} per meal day · ${p.mealMethod==='card'?'Meal card':'Cash meals'}. Tax settings apply to all months below.`;
   renderForecastInputs(state.forecast);
