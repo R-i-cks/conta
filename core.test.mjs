@@ -392,3 +392,39 @@ test('annual taxable estimate applies CIRS 25 and the IRS Jovem annual cap',()=>
   assert.equal(annualTaxableEstimate({...youth,careerYear:1,gross:400000}).exemption,YOUTH_CAP,'the cap binds');
   assert.throws(()=>annualTaxableEstimate({...base,youth:true,eligible:false}),/eligibility/);
 });
+
+// Dates the app renders itself are dd/mm/yyyy; month-only labels keep their names.
+import {dateLabel, monthLabel, termLabel} from './core.mjs';
+import {expectedMonth} from './planning.mjs';
+test('dates render dd/mm/yyyy without drifting a day',()=>{
+  assert.equal(dateLabel('2026-09-19'),'19/09/2026');
+  assert.equal(dateLabel('2026-01-01'),'01/01/2026');
+  assert.equal(dateLabel('2026-12-31'),'31/12/2026');
+  assert.equal(dateLabel('2028-02-29'),'29/02/2028','leap day survives the noon anchor');
+  assert.equal(monthLabel('2026-09'),'Sept 2026');
+});
+test('the expected month is salary in, commitments out, and nothing discretionary',()=>{
+  const s=outflowState();
+  s.payroll={...defaultPayroll(),gross:150000};
+  s.forecast=defaultForecast(s.payroll);
+  s.recurring=[{id:'rent',description:'Rent',category:'Housing',amount:50000,accountId:'cash',start:'2026-09-01',end:'',day:1,enabled:true,posted:['2026-09']}];
+  s.transactions=s.transactions.map(t=>t.id==='t1'?{...t,recurringId:'rent',amount:50000,date:'2026-09-01'}:t);
+  const row=projectYear(s).rows.find(r=>r.month==='2026-09');
+  const e=expectedMonth(s,'2026-09');
+  assert.equal(e.inPlan,true);
+  assert.equal(e.bank,row.bank);assert.equal(e.mealCard,row.mealCard);
+  assert.equal(e.committed,row.recurring+row.loans+row.investments);
+  assert.equal(e.left,row.bank-e.committed);
+  assert.ok(row.other>0,'the month has discretionary spending');
+  assert.notEqual(e.left,row.remaining,'which the commitment figure leaves out');
+  assert.deepEqual(expectedMonth(s,'2030-04'),{inPlan:false},'months outside the plan have no row');
+});
+test('loan terms read as years and months',()=>{
+  assert.equal(termLabel(0),'0 months');
+  assert.equal(termLabel(1),'1 month');
+  assert.equal(termLabel(7),'7 months');
+  assert.equal(termLabel(12),'1 year');
+  assert.equal(termLabel(13),'1 year 1 month');
+  assert.equal(termLabel(29),'2 years 5 months');
+  assert.equal(termLabel(240),'20 years','a round term drops the months');
+});

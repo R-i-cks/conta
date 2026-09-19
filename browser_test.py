@@ -1,5 +1,6 @@
 """Optional end-to-end checks: run server first, then uv run --with playwright python browser_test.py."""
 import json
+import re
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
@@ -38,6 +39,7 @@ with sync_playwright() as p:
     add('<img src=x onerror="alert(1)">', "100.01", "expense", "Groceries")
     assert page.locator("#recent-list img").count() == 0
     expect(page.locator("#balance")).to_contain_text("400,28")
+    expect(page.locator("#transaction-rows tr").first).to_contain_text(re.compile(r"\d{2}/\d{2}/\d{4}"))
     expect(page.locator("#spending .ring-center strong")).to_contain_text("100,01")
     expect(page.locator("#spending .spending-row")).to_have_count(1)
     expect(page.locator("#spending .spending-row")).to_contain_text("Groceries")
@@ -201,18 +203,25 @@ with sync_playwright() as p:
         loan.locator(f'[name="{name}"]').fill(value)
     loan.get_by_role("button", name="Save loan").click()
     expect(page.locator("#loan-dialog")).not_to_be_visible()
-    expect(page.locator("#loan-result")).to_contain_text("0 months sooner")
+    expect(page.locator("#loan-result")).to_contain_text("No change")
+    def months_saved():
+        """The headline reads "2 years 5 months sooner"; compare it in months."""
+        text = page.locator("#loan-result .tax-total").inner_text()
+        years = re.search(r"(\d+)\s+year", text)
+        months = re.search(r"(\d+)\s+month", text)
+        return (int(years.group(1)) * 12 if years else 0) + (int(months.group(1)) if months else 0)
+
     scenario = page.locator("#scenario-form")
     scenario.locator('[name="lump"]').fill("1000")
-    once = page.locator("#loan-result .tax-total").inner_text()
-    assert int(once.split()[0]) > 0
+    once = months_saved()
+    assert once > 0
     scenario.locator('[name="mode"]').select_option("recurring")
     expect(page.locator("#lump-field")).not_to_be_visible()
     scenario.locator('[name="recurring"]').fill("100")
-    repeat = int(page.locator("#loan-result .tax-total").inner_text().split()[0])
+    repeat = months_saved()
     scenario.locator('[name="mode"]').select_option("both")
-    both = int(page.locator("#loan-result .tax-total").inner_text().split()[0])
-    assert both > repeat and both > int(once.split()[0])
+    both = months_saved()
+    assert both > repeat and both > once
     expect(page.locator("#scenario-error")).to_be_empty()
     assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).loans[0].balance") == 1000000
     page.locator('#loans summary').filter(has_text="Monthly repayment schedule").click()
@@ -237,6 +246,8 @@ with sync_playwright() as p:
     home.get_by_role("button", name="Save loan").click()
     expect(page.locator("#loan-dialog")).not_to_be_visible()
     expect(page.locator("#loan-cards")).to_contain_text("spread")
+    expect(page.locator("#loan-cards")).to_contain_text("20 years · 240 payments")
+    expect(page.locator("#loan-terms")).to_contain_text("20 years from")
     assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).loans.find(l => l.name === 'My home').tan") == 3.004
     # Remove it again so the rest of the suite sees the single-loan workspace it expects.
     page.locator("#loan-cards article").filter(has_text="My home").locator("[data-loan-delete]").click()
@@ -266,6 +277,12 @@ with sync_playwright() as p:
     page.locator("#forecast-form").get_by_role("button", name="Save salary plan").click()
     assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).forecast.rows[1].gross") == 140000
     expect(page.locator("#forecast-error")).to_be_empty()
+    salary = page.locator("#forecast-results tr").first.locator("td").first.inner_text()
+    page.locator('nav a[href="#overview"]').click()
+    expect(page.locator("#overview-expected")).to_contain_text("Salary to bank")
+    expect(page.locator("#overview-expected")).to_contain_text(salary)
+    expect(page.locator("#overview-expected-note")).to_contain_text(re.compile(r"Expected salary on \d{2}/\d{2}/\d{4}"))
+    page.locator('nav a[href="#planning"]').click()
     page.locator("#add-recurring").click()
     recurring = page.locator("#recurring-form")
     recurring.locator('[name="description"]').fill("Rent")
@@ -400,7 +417,7 @@ with sync_playwright() as p:
     page.locator("#forecast-payday").fill("28")
     page.locator("#forecast-form").get_by_role("button", name="Save salary plan").click()
     expect(page.locator("#forecast-results tr")).to_have_count(2)
-    expect(page.locator("#forecast-results tr").first).to_contain_text("28 Sept 2026")
+    expect(page.locator("#forecast-results tr").first).to_contain_text("28/09/2026")
     page.locator('nav a[href="#portfolio"]').click()
     expect(page.locator("#investment-projection")).to_contain_text("Recorded contributions through that date")
     page.locator("#investment-projection").get_by_role("button", name="Update actual value").click()

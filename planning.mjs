@@ -43,6 +43,15 @@ export function cashPlan(state,month,asOf) {
 }
 // A plan covers one calendar year, from the payroll month to that December.
 const daysInMonth=month=>new Date(Number(month.slice(0,4)),Number(month.slice(5)),0).getDate();
+// What the selected month promises: salary in, and the outflows already
+// committed to it. `other` is discretionary recorded spending, so it belongs to
+// the overview ring rather than to a commitment total.
+export function expectedMonth(state,month) {
+  const row=projectYear(state).rows.find(r=>r.month===month);
+  if(!row)return {inPlan:false};
+  const committed=row.recurring+row.loans+row.investments;
+  return {inPlan:true,payDate:row.payDate,bank:row.bank,mealCard:row.mealCard,committed,left:row.bank-committed};
+}
 export function defaultForecast(payroll) {
   const rows=[],december=`${payroll.month.slice(0,4)}-12`;
   for(let month=payroll.month;month<=december;month=addMonth(month,1))rows.push({month,gross:payroll.gross,mealDays:Math.min(payroll.mealDays,daysInMonth(month)),holiday:0,christmas:month===december?payroll.gross:0});

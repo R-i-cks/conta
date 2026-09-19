@@ -21,13 +21,15 @@ The first launch displays labelled sample records. Choose **Start my finances** 
 
 ## What is included
 
-- Overview: the month's balance, money in, money out and tracked assets, plus a ring showing every euro that left your accounts — loan instalments and monthly bills separated from discretionary categories, with investment contributions included even though they are not expenses.
+- Overview: the month's balance, money in, money out and tracked assets; **This month, expected** — the salary your plan plays out, the bills, instalments and contributions already committed to the month, and what is left of the deposit once they are paid; plus a ring showing every euro that left your accounts — loan instalments and monthly bills separated from discretionary categories, with investment contributions included even though they are not expenses.
 - Transactions: income and expenses, dates, categories, bank-account assignment, search, filters, editing, deletion and CSV export.
 - Accounts: current accounts, savings, brokerage cash and cash; an opening balance plus assigned activity determines each balance. Transfers move money between accounts without creating income or spending. Referenced accounts cannot be deleted until transactions are reassigned and transfers removed.
 - Portfolio: ETFs, stocks, funds, bonds, crypto and other holdings; fractional units, remaining cost basis, manual EUR prices, unrealised gain/loss, allocation and holdings CSV export.
 - Tracked assets: cash plus holdings, excluding loan balances. Brokerage account balances must contain cash only, so securities are not counted twice. Unassigned transactions do not affect account balances.
 - History: save daily cash/portfolio valuations; view their timeline and delete snapshots. Deposits, withdrawals and changes in holdings affect these values, so the history is not a time-weighted investment return.
 - Backups: JSON export/restore includes accounts, transfers, transactions, holdings, snapshots, both calculator settings, loans, monthly expense rules, salary plans, investment plans and contribution history. Version-1, version-2 and version-3 backups and existing saved transactions migrate without changing transaction amounts or dates.
+
+Dates are shown as dd/mm/yyyy throughout. CSV exports keep ISO `yyyy-mm-dd`, which spreadsheets parse the same way in every locale. Loan terms are shown in years and months alongside the payment count.
 
 Bank accounts and quotes are tracked manually. No bank login, live market feed, currency conversion or trading connection is used. Editing holdings does not post a cash movement or calculate realised gains. Record/reconcile cash changes separately.
 

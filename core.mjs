@@ -146,6 +146,18 @@ export function monthlyOutflows(state,month) {
   const total=groups.reduce((sum,g)=>sum+g.amount,0);
   return {groups:groups.map(g=>({...g,share:total?g.amount/total*100:0})),total,spent:sum(entries),invested};
 }
+export function termLabel(months) {
+  const years=Math.floor(months/12),rest=months%12,parts=[];
+  if(years)parts.push(`${years} year${years===1?'':'s'}`);
+  if(rest||!years)parts.push(`${rest} month${rest===1?'':'s'}`);
+  return parts.join(' ');
+}
+export function dateLabel(value) {
+  return new Intl.DateTimeFormat('pt-PT',{day:'2-digit',month:'2-digit',year:'numeric'}).format(new Date(value+'T12:00:00'));
+}
+export function monthLabel(month) {
+  return new Date(month+'-01T12:00:00').toLocaleDateString('en-GB',{month:'short',year:'numeric'});
+}
 export function totals(transactions) {
   return transactions.reduce((a, t) => { a[t.type] += t.amount; a.balance += t.type === 'income' ? t.amount : -t.amount; return a; }, {income: 0, expense: 0, balance: 0});
 }

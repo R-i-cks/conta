@@ -1,7 +1,7 @@
 import {validateInvestmentPlan,projectInvestment,recordContribution,undoContribution} from './investments.mjs';
 import {LOAN_KINDS, amortize, compareLoan, loanDates, dueDate} from './loans.mjs';
-import {defaultForecast, validateForecast, projectYear, pendingPayments, cashPlan, postDueExpenses} from './planning.mjs';
-import {BRACKETS, CATEGORIES, ASSET_TYPES, cents, calculateTax, totals, monthlyOutflows, validateState, toCSV, csvCell, accountBalances, portfolio} from './core.mjs';
+import {defaultForecast, validateForecast, projectYear, pendingPayments, cashPlan, postDueExpenses, expectedMonth} from './planning.mjs';
+import {BRACKETS, CATEGORIES, ASSET_TYPES, cents, calculateTax, totals, monthlyOutflows, validateState, toCSV, csvCell, accountBalances, portfolio, dateLabel, monthLabel, termLabel} from './core.mjs';
 import {calculatePayroll, annualTaxableEstimate, YOUTH_CAP} from './payroll.mjs';
 const $ = selector => document.querySelector(selector);
 const money = value => new Intl.NumberFormat('pt-PT', {style:'currency',currency:'EUR'}).format(value / 100);
@@ -55,7 +55,6 @@ function route() {
 const icons={Salary:'↙','Other income':'↙',Housing:'⌂',Groceries:'▧',Transport:'↔',Dining:'♧',Shopping:'◇',Health:'＋',Leisure:'♫',Utilities:'ϟ',Other:'·'};
 function sorted(transactions) {return [...transactions].sort((a,b)=>b.date.localeCompare(a.date)||b.id.localeCompare(a.id));}
 function filtered() {const query=$('#search').value.toLowerCase(); const month=$('#transaction-month').value;const type=$('#type-filter').value;return sorted(state.transactions.filter(t=>(!month||t.date.startsWith(month))&&(type==='all'||t.type===type)&&`${t.description} ${t.category}`.toLowerCase().includes(query)));}
-function dateLabel(value) {return new Intl.DateTimeFormat('en-GB',{day:'numeric',month:'short',year:'numeric'}).format(new Date(value+'T12:00:00'));}
 function renderOverview() {
   const month=$('#overview-month').value || today().slice(0,7);
   renderCashSummary('#overview-cash',month);
@@ -71,6 +70,7 @@ function renderOverview() {
   const held=portfolio(state.holdings),cashNow=[...accountBalances(state,today()).values()].reduce((sum,value)=>sum+value,0);
   $('#assets').textContent=money(cashNow+held.value);
   $('#assets-foot').textContent=`${state.accounts.length} account${state.accounts.length===1?'':'s'} · ${state.holdings.length} holding${state.holdings.length===1?'':'s'} · today`;
+  renderExpectedMonth(month);
   const outflow=monthlyOutflows(state,month);
   const colors=['#345f43','#4f7a53','#7d9b63','#96ae72','#cfdaa7','#e3bb95','#9baeb1'];
   let angle=0;
@@ -78,6 +78,22 @@ function renderOverview() {
   const ringLabel=`Money out ${money(outflow.total)}. `+outflow.groups.map(g=>`${g.label} ${money(g.amount)}, ${percent(g.share)}`).join('; ');
   $('#spending').innerHTML=outflow.total?`<div class="spending-ring" role="img" aria-label="${escape(ringLabel)}" style="background:conic-gradient(${gradient})"><div class="ring-center"><span>Money out</span><strong>${money(outflow.total)}</strong></div></div><div class="spending-legend">${outflow.groups.map((g,i)=>`<div class="spending-row"><i style="background:${colors[i]}"></i><span>${escape(g.label)} · ${percent(Math.round(g.share*10)/10)}</span><strong>${money(g.amount)}</strong></div>`).join('')}</div>`:'<p class="empty">A fresh start.<br>Your spending will appear here.</p>';
   $('#recent-list').innerHTML=sorted(entries).slice(0,4).map(t=>`<div class="recent-item"><span class="category-icon" aria-hidden="true">${icons[t.category]}</span><div><h3>${escape(t.description)}</h3><p>${escape(t.category)} · ${dateLabel(t.date)}</p></div><strong class="amount ${t.type}">${t.type==='income'?'+':'−'}${money(t.amount)}</strong></div>`).join('')||'<p class="empty">Your month starts here.<br>Add your first transaction.</p>';
+}
+// The landing page must survive an unsaved or invalid salary plan.
+function renderExpectedMonth(month) {
+  const figures=$('#overview-expected'),note=$('#overview-expected-note');
+  try {
+    const e=expectedMonth(state,month);
+    figures.hidden=!e.inPlan;
+    figures.innerHTML=e.inPlan?[['Salary to bank',e.bank],['Meal card',e.mealCard],['Committed out',e.committed],['Left over',e.left]]
+      .map(([label,value])=>`<div><span>${label}</span><strong class="${value<0?'negative':''}">${money(value)}</strong></div>`).join(''):'';
+    note.textContent=e.inPlan
+      ?`Expected salary on ${dateLabel(e.payDate)}, less this month’s monthly bills, loan instalments and investment contributions, whether recorded yet or not. Meal-card value is not spendable cash, and everyday spending is not counted here.`
+      :'No salary plan covers this month. Set one in Planning to see the month ahead.';
+  } catch(error) {
+    figures.hidden=true;figures.innerHTML='';
+    note.textContent='This month cannot be projected until your salary plan is valid: '+error.message;
+  }
 }
 function renderTransactions() {
   const entries=filtered();const total=totals(entries);
@@ -188,7 +204,7 @@ function renderWealth() {
   else {
     const values=history.map(s=>s.cash+s.investments),low=Math.min(...values),high=Math.max(...values),span=Math.max(100,high-low);
     const points=history.map((s,i)=>[55+i/(history.length-1)*470,20+(high-values[i])/span*130]);
-    $('#wealth-chart').innerHTML=`<svg class="wealth-svg" viewBox="0 0 560 195" role="img" aria-label="Tracked assets from ${history[0].date} to ${history.at(-1).date}, ending at ${money(values.at(-1))}"><line x1="55" x2="530" y1="20" y2="20" stroke="#e6eadf"/><line x1="55" x2="530" y1="150" y2="150" stroke="#e6eadf"/><text x="0" y="24">${Math.round(high/100).toLocaleString('en-GB')} €</text><text x="0" y="154">${Math.round(low/100).toLocaleString('en-GB')} €</text><polyline points="${points.map(p=>p.join(',')).join(' ')}" fill="none" stroke="#345f43" stroke-width="3"/>${points.map(([x,y],i)=>`<circle cx="${x}" cy="${y}" r="4" fill="#345f43"><title>${history[i].date}: ${money(values[i])}</title></circle>`).join('')}<text x="55" y="184">${history[0].date}</text><text x="460" y="184">${history.at(-1).date}</text></svg>`;
+    $('#wealth-chart').innerHTML=`<svg class="wealth-svg" viewBox="0 0 560 195" role="img" aria-label="Tracked assets from ${dateLabel(history[0].date)} to ${dateLabel(history.at(-1).date)}, ending at ${money(values.at(-1))}"><line x1="55" x2="530" y1="20" y2="20" stroke="#e6eadf"/><line x1="55" x2="530" y1="150" y2="150" stroke="#e6eadf"/><text x="0" y="24">${Math.round(high/100).toLocaleString('en-GB')} €</text><text x="0" y="154">${Math.round(low/100).toLocaleString('en-GB')} €</text><polyline points="${points.map(p=>p.join(',')).join(' ')}" fill="none" stroke="#345f43" stroke-width="3"/>${points.map(([x,y],i)=>`<circle cx="${x}" cy="${y}" r="4" fill="#345f43"><title>${dateLabel(history[i].date)}: ${money(values[i])}</title></circle>`).join('')}<text x="55" y="184">${dateLabel(history[0].date)}</text><text x="460" y="184">${dateLabel(history.at(-1).date)}</text></svg>`;
   }
 }
 function openRecord(formId,values) {
@@ -294,10 +310,9 @@ payrollForm.addEventListener('submit',event=>{
     const v=Object.fromEntries(new FormData(payrollForm));
     const payroll={gross:cents(v.gross),mealDaily:cents(v.mealDaily),mealDays:Number(v.mealDays),mealMethod:v.mealMethod,annualMealDays:Number(v.annualMealDays),month:v.month,family:v.family,dependants:Number(v.dependants),payments:Number(v.payments),youth:!!v.youth,age:Number(v.age||0),careerYear:Number(v.careerYear||1),eligible:!!v.eligible,employerApplied:!!v.employerApplied};
     calculatePayroll(payroll);
-    if(save({...state,payroll})){renderPayroll();renderPlanning();toast('Take-home estimate updated.');}else $('#payroll-error').textContent='Could not save your salary settings. Check browser storage.';
+    if(save({...state,payroll})){renderPayroll();renderPlanning();renderOverview();toast('Take-home estimate updated.');}else $('#payroll-error').textContent='Could not save your salary settings. Check browser storage.';
   }catch(error){$('#payroll-error').textContent=error.message;}
 });
-const monthLabel=month=>new Date(month+'-01T12:00:00').toLocaleDateString('en-GB',{month:'short',year:'numeric'});
 const eurInput=value=>(value/100).toFixed(2);
 function renderPlanning(){
   const p=state.payroll;
@@ -394,7 +409,7 @@ function renderLoans(){
   $('#selected-loan').innerHTML=state.loans.map(l=>`<option value="${escape(l.id)}">${escape(l.name)}</option>`).join('');
   if(state.loans.some(l=>l.id===selected))$('#selected-loan').value=selected;
   $('#loan-simulator').hidden=!state.loans.length;
-  $('#loan-cards').innerHTML=state.loans.map(l=>`<article class="panel account-card"><div class="panel-heading"><span class="pill">${LOAN_KINDS[l.kind]}</span><span class="muted">${l.tracked?'In monthly plan':'Simulation only'}</span></div><h2>${escape(l.name)}</h2><div class="stat-number">${money(l.balance)}</div><small class="muted">Principal at start of schedule · ${l.posted.length} payment(s) recorded</small><p class="muted">${dateLabel(l.start)} – ${dateLabel(l.end)} · ${l.months} payments on day ${l.paymentDay} · ${escape(accountName(l.accountId))}<br>TAN ${rate(l.tan)}${rateSource(l)} · TAEG ${l.taeg===null?'not entered':rate(l.taeg)}</p><div class="button-row"><button class="button secondary" data-loan-explore="${escape(l.id)}">Explore</button><button class="icon-button" data-loan-edit="${escape(l.id)}">Edit</button><button class="icon-button" data-loan-delete="${escape(l.id)}">Delete</button></div></article>`).join('')||'<article class="panel"><p class="empty">Add your car, home or personal loan.<br>Start with the remaining balance and term from your lender.</p></article>';
+  $('#loan-cards').innerHTML=state.loans.map(l=>`<article class="panel account-card"><div class="panel-heading"><span class="pill">${LOAN_KINDS[l.kind]}</span><span class="muted">${l.tracked?'In monthly plan':'Simulation only'}</span></div><h2>${escape(l.name)}</h2><div class="stat-number">${money(l.balance)}</div><small class="muted">Principal at start of schedule · ${l.posted.length} payment(s) recorded</small><p class="muted">${dateLabel(l.start)} – ${dateLabel(l.end)} · ${termLabel(l.months)} · ${l.months} payments on day ${l.paymentDay} · ${escape(accountName(l.accountId))}<br>TAN ${rate(l.tan)}${rateSource(l)} · TAEG ${l.taeg===null?'not entered':rate(l.taeg)}</p><div class="button-row"><button class="button secondary" data-loan-explore="${escape(l.id)}">Explore</button><button class="icon-button" data-loan-edit="${escape(l.id)}">Edit</button><button class="icon-button" data-loan-delete="${escape(l.id)}">Delete</button></div></article>`).join('')||'<article class="panel"><p class="empty">Add your car, home or personal loan.<br>Start with the remaining balance and term from your lender.</p></article>';
   updateLoanSimulation();
 }
 const rateSource=l=>l.indexRate!==null&&l.spread!==null?` (index ${rate(l.indexRate)} + spread ${rate(l.spread)})`:'';
@@ -411,13 +426,13 @@ function updateLoanSimulation(){
   const loan=state.loans.find(l=>l.id===$('#selected-loan').value);loanComparison=null;
   if(!loan)return;
   toggleScenario();$('#scenario-form').elements.after.max=loan.months-1;
-  $('#loan-terms').textContent=`${money(loan.balance)} principal · ${loan.months} months from ${monthLabel(loan.firstMonth)} · ${loan.rateType} TAN ${rate(loan.tan)}${rateSource(loan)} · TAEG ${loan.taeg===null?'not entered':rate(loan.taeg)} · ${money(loan.monthlyCosts)} monthly costs · interest duty ${percent(loan.interestTax)}.`;
+  $('#loan-terms').textContent=`${money(loan.balance)} principal · ${termLabel(loan.months)} from ${monthLabel(loan.firstMonth)} · ${loan.rateType} TAN ${rate(loan.tan)}${rateSource(loan)} · TAEG ${loan.taeg===null?'not entered':rate(loan.taeg)} · ${money(loan.monthlyCosts)} monthly costs · interest duty ${percent(loan.interestTax)}.`;
   try{
     const s=scenarioValues(),{baseline,shorter,lower}=compareLoan(loan,s);loanComparison={loan,baseline,shorter};
     const row=(label,value)=>`<div><span>${label}</span><strong>${value}</strong></div>`;
-    $('#loan-result').innerHTML=`<p class="eyebrow">YOUR EARLIER FINISH</p><div class="tax-total">${shorter.monthsSaved} months sooner</div><p class="tax-result-caption">${shorter.months===0?'Paid off before the first instalment':`Debt-free ${monthLabel(shorter.payoffMonth)}`} · originally ${monthLabel(baseline.payoffMonth)}</p><div class="tax-breakdown">${row('Regular instalment kept',money(baseline.originalPayment))}${row('Term remaining',`${shorter.months} vs ${baseline.months} months`)}${row('Interest saved',money(shorter.interestSaved))}${row('Extra principal repaid',money(shorter.extra))}${row('Repayment fees + stamp duty',money(shorter.fee+shorter.feeTax))}${row('Net savings after fees',money(shorter.savings))}</div><p class="tax-result-note">Net savings compare all remaining cash outflows, including entered interest tax and monthly costs. The regular instalment excludes those costs and extra repayments. Recurring extras stop at payoff and are capped at the balance left.</p><details class="calculation-details"><summary>Compare with reducing the instalment</summary><p>With the same extra-payment instructions, recalculating the instalment after each overpayment gives a ${lower.months}-month term and ${money(lower.savings)} net savings. Keeping the instalment saves ${money(shorter.savings-lower.savings)} more in this scenario.</p></details>`;
+    $('#loan-result').innerHTML=`<p class="eyebrow">YOUR EARLIER FINISH</p><div class="tax-total">${shorter.monthsSaved?termLabel(shorter.monthsSaved)+' sooner':'No change'}</div><p class="tax-result-caption">${shorter.months===0?'Paid off before the first instalment':`Debt-free ${monthLabel(shorter.payoffMonth)}`} · originally ${monthLabel(baseline.payoffMonth)}</p><div class="tax-breakdown">${row('Regular instalment kept',money(baseline.originalPayment))}${row('Term remaining',`${termLabel(shorter.months)} vs ${termLabel(baseline.months)}`)}${row('Interest saved',money(shorter.interestSaved))}${row('Extra principal repaid',money(shorter.extra))}${row('Repayment fees + stamp duty',money(shorter.fee+shorter.feeTax))}${row('Net savings after fees',money(shorter.savings))}</div><p class="tax-result-note">Net savings compare all remaining cash outflows, including entered interest tax and monthly costs. The regular instalment excludes those costs and extra repayments. Recurring extras stop at payoff and are capped at the balance left.</p><details class="calculation-details"><summary>Compare with reducing the instalment</summary><p>With the same extra-payment instructions, recalculating the instalment after each overpayment gives a ${lower.months}-month term and ${money(lower.savings)} net savings. Keeping the instalment saves ${money(shorter.savings-lower.savings)} more in this scenario.</p></details>`;
     const plot=result=>[[0,loan.balance],...result.rows.map(r=>[r.period,r.balance])].map(([x,y])=>`${45+x/baseline.months*610},${20+(1-y/loan.balance)*180}`).join(' ');
-    $('#loan-chart').innerHTML=`<div class="panel-heading"><h2>Your balance, falling faster</h2><span class="muted">Grey: original · Green: extra payments</span></div><svg viewBox="0 0 700 235" role="img" aria-label="Original loan paid in ${baseline.months} months, extra-payment scenario in ${shorter.months}." class="loan-svg"><line x1="45" x2="655" y1="200" y2="200" stroke="#d9dfd0"/><polyline points="${plot(baseline)}" fill="none" stroke="#b2bbad" stroke-width="3"/><polyline points="${plot(shorter)}" fill="none" stroke="#345f43" stroke-width="3"/><text x="45" y="13">${money(loan.balance)}</text><text x="45" y="226">Start</text><text x="565" y="226">Month ${baseline.months}</text></svg>`;
+    $('#loan-chart').innerHTML=`<div class="panel-heading"><h2>Your balance, falling faster</h2><span class="muted">Grey: original · Green: extra payments</span></div><svg viewBox="0 0 700 235" role="img" aria-label="Original loan paid in ${termLabel(baseline.months)}, extra-payment scenario in ${termLabel(shorter.months)}." class="loan-svg"><line x1="45" x2="655" y1="200" y2="200" stroke="#d9dfd0"/><polyline points="${plot(baseline)}" fill="none" stroke="#b2bbad" stroke-width="3"/><polyline points="${plot(shorter)}" fill="none" stroke="#345f43" stroke-width="3"/><text x="45" y="13">${money(loan.balance)}</text><text x="45" y="226">Start</text><text x="520" y="226">${termLabel(baseline.months)}</text></svg>`;
     $('#loan-schedule').innerHTML=shorter.rows.map(r=>`<tr><td>${r.period||'Before first'}</td><td>${monthLabel(r.month)}</td>${[r.payment,r.interest,r.interestTax+r.costs,r.extra,r.fee+r.feeTax,r.total,r.balance].map(v=>`<td>${money(v)}</td>`).join('')}</tr>`).join('');
     $('#scenario-error').textContent='';$('#export-loan').disabled=false;
   }catch(error){$('#scenario-error').textContent=error.message;$('#loan-result').innerHTML='<p class="empty">Adjust the scenario to see your earlier payoff.</p>';$('#loan-chart').innerHTML='';$('#loan-schedule').innerHTML='';$('#export-loan').disabled=true;}
@@ -434,7 +449,7 @@ function toggleLoanRate(){
 }
 function updateLoanDates(){
   const f=$('#loan-form');
-  try{const term=loanDates(f.elements.start.value,f.elements.end.value,Number(f.elements.paymentDay.value));$('#loan-date-summary').textContent=`${term.months} payments, starting ${dateLabel(dueDate(term.firstMonth,Number(f.elements.paymentDay.value)))}. Enter principal outstanding before this first payment.`;}
+  try{const term=loanDates(f.elements.start.value,f.elements.end.value,Number(f.elements.paymentDay.value));$('#loan-date-summary').textContent=`${termLabel(term.months)} · ${term.months} payments, starting ${dateLabel(dueDate(term.firstMonth,Number(f.elements.paymentDay.value)))}. Enter principal outstanding before this first payment.`;}
   catch(error){$('#loan-date-summary').textContent=error.message;}
 }
 function openLoan(l){
@@ -495,7 +510,7 @@ function renderInvestments(){
       const contributed=state.contributions.filter(c=>c.holdingId===h.id&&c.date>=p.start&&c.date<=h.updated).reduce((sum,c)=>sum+c.amount,0);
       const points=projection.rows.filter((r,i)=>i%12===0||i===projection.rows.length-1),max=Math.max(1,...points.map(r=>r.value));
       const poly=points.map((r,i)=>`${40+i/Math.max(1,points.length-1)*620},${180-r.value/max*160}`).join(' ');
-      return `<section class="spaced"><h3>${escape(h.name)}</h3><div class="plan-summary spaced">${[['Projected end value',projection.value],['Planned contributions',projection.contributed],['Projected growth',projection.growth]].map(([label,value])=>`<div><span>${label}</span><strong>${money(value)}</strong></div>`).join('')}</div><svg class="loan-svg" viewBox="0 0 700 220" role="img" aria-label="Projected investment value from ${escape(p.start)} to ${escape(p.end)}: ${money(projection.value)}"><polyline points="${poly}" fill="none" stroke="#345f43" stroke-width="3"/><text x="40" y="205">${escape(p.start)}</text><text x="555" y="205">${escape(p.end)}</text></svg><p class="scope-note">Initial value: ${money(p.initialValue)}. Actual value at ${dateLabel(h.updated)}: <strong>${money(actual)}</strong>. ${h.updated>=p.start&&h.updated<=p.end?`Planned value at that date: ${money(comparison.value)} · Difference: ${money(actual-comparison.value)}. Recorded contributions through that date: ${money(contributed)} versus planned ${money(comparison.contributed)}.`:'Update the holding’s value within the plan dates to compare progress.'} Current gain/loss versus cost basis: ${money(actual-h.cost)}. <button class="text-button" data-investment-holding="${escape(h.id)}">Update actual value</button></p></section>`;
+      return `<section class="spaced"><h3>${escape(h.name)}</h3><div class="plan-summary spaced">${[['Projected end value',projection.value],['Planned contributions',projection.contributed],['Projected growth',projection.growth]].map(([label,value])=>`<div><span>${label}</span><strong>${money(value)}</strong></div>`).join('')}</div><svg class="loan-svg" viewBox="0 0 700 220" role="img" aria-label="Projected investment value from ${escape(dateLabel(p.start))} to ${escape(dateLabel(p.end))}: ${money(projection.value)}"><polyline points="${poly}" fill="none" stroke="#345f43" stroke-width="3"/><text x="40" y="205">${escape(dateLabel(p.start))}</text><text x="555" y="205">${escape(dateLabel(p.end))}</text></svg><p class="scope-note">Initial value: ${money(p.initialValue)}. Actual value at ${dateLabel(h.updated)}: <strong>${money(actual)}</strong>. ${h.updated>=p.start&&h.updated<=p.end?`Planned value at that date: ${money(comparison.value)} · Difference: ${money(actual-comparison.value)}. Recorded contributions through that date: ${money(contributed)} versus planned ${money(comparison.contributed)}.`:'Update the holding’s value within the plan dates to compare progress.'} Current gain/loss versus cost basis: ${money(actual-h.cost)}. <button class="text-button" data-investment-holding="${escape(h.id)}">Update actual value</button></p></section>`;
     }catch(error){return `<p class="error">${escape(error.message)}</p>`;}
   }).join('');
   $('#contribution-rows').innerHTML=sorted(state.contributions).map(c=>`<tr><td>${dateLabel(c.date)}</td><td>${escape(state.holdings.find(h=>h.id===c.holdingId)?.name||'Investment')}</td><td>${escape(accountName(c.accountId))}</td><td>${money(c.amount)}</td><td>${c.units||'Statement value'}</td><td><button class="icon-button" data-contribution-undo="${escape(c.id)}">Undo</button></td></tr>`).join('');
