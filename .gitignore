@@ -1,0 +1,31 @@
+# Local Python / browser tooling
+__pycache__/
+*.py[cod]
+.venv/
+node_modules/
+playwright-report/
+test-results/
+
+# Secrets and machine-specific configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+secrets*.json
+*.desktop
+.codex/
+.agents/
+
+# Personal finance data, statements and exports
+conta-backup-*.json
+conta-recovery-*.json
+conta-*.csv
+backups/
+private/
+statements/
+*.log
+.DS_Store
