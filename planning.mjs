@@ -1,6 +1,6 @@
 import {calculatePayroll} from './payroll.mjs';
 import {addMonth,amortize,validateLoan,validDate,validMonth,dueDate} from './loans.mjs';
-import {accountBalances} from './core.mjs';
+import {accountTotals} from './core.mjs';
 export {dueDate};
 export function dueOccurrences(rule,through) {
   if(!rule.enabled)return [];
@@ -30,9 +30,32 @@ export function postDueExpenses(state,through,idFactory,selection=null) {
   const update=(items,kind)=>items.map(r=>({...r,posted:[...(r.posted||[]),...due.filter(p=>p.kind===kind&&p.sourceId===r.id).map(p=>p.month)]}));
   return {...state,transactions,recurring:update(state.recurring,'recurring'),loans:update(state.loans,'loan')};
 }
+export function postSalary(state,month,through,idFactory) {
+  if(state.forecast.posted.includes(month))return state;
+  const row=projectYear(state).rows.find(r=>r.month===month);
+  if(!row)throw new Error('No salary is planned for this month.');
+  if(row.payDate>through)throw new Error('Salary can be recorded on or after its payday.');
+  if(row.bank&&!state.payroll.bankAccountId)throw new Error('Choose a salary bank account first.');
+  if(row.mealCard&&!state.payroll.mealAccountId)throw new Error('Choose a meal-card account first.');
+  const transactions=[
+    ...(row.bank?[{id:idFactory(),date:row.payDate,description:'Salary',category:'Salary',type:'income',amount:row.bank,accountId:state.payroll.bankAccountId,salaryPart:'bank',occurrence:month}]:[]),
+    ...(row.mealCard?[{id:idFactory(),date:row.payDate,description:'Meal allowance',category:'Salary',type:'income',amount:row.mealCard,accountId:state.payroll.mealAccountId,salaryPart:'meal',occurrence:month}]:[]),
+  ];
+  if(!transactions.length)throw new Error('This month has no salary to record.');
+  return {...state,transactions:[...state.transactions,...transactions],forecast:{...state.forecast,posted:[...state.forecast.posted,month]}};
+}
+export function scheduledTransactions(state) {
+  const salary=projectYear(state).rows.flatMap(row=>state.forecast.posted.includes(row.month)?[]:[
+    ...(row.bank?[{id:`scheduled-salary-bank-${row.month}`,date:row.payDate,description:'Salary',category:'Salary',type:'income',amount:row.bank,accountId:state.payroll.bankAccountId,kind:'salary',scheduled:true}]:[]),
+    ...(row.mealCard?[{id:`scheduled-salary-meal-${row.month}`,date:row.payDate,description:'Meal allowance',category:'Salary',type:'income',amount:row.mealCard,accountId:state.payroll.mealAccountId,kind:'salary',scheduled:true}]:[]),
+  ]);
+  const end=state.loans.reduce((latest,loan)=>loan.tracked&&loan.end>latest?loan.end:latest,state.forecast.end);
+  const loans=pendingPayments(state,end).filter(p=>p.kind==='loan').map(p=>({id:`scheduled-loan-${p.sourceId}-${p.month}`,date:p.date,description:p.description,category:p.category,type:'expense',amount:p.amount,accountId:p.accountId,kind:'loan',scheduled:true}));
+  return [...salary,...loans].sort((a,b)=>a.date.localeCompare(b.date)||a.description.localeCompare(b.description));
+}
 export function cashPlan(state,month,asOf) {
   const end=dueDate(month,31),through=asOf<end?asOf:end;
-  const cash=[...accountBalances(state,through).values()].reduce((sum,value)=>sum+value,0);
+  const {cash}=accountTotals(state,through);
   const pending=pendingPayments(state,end);
   // Recorded future outflows are reserved until their transaction date. Linked
   // unassigned payments still reserve cash until assigned to a real account.
@@ -47,10 +70,14 @@ const daysInMonth=month=>new Date(Number(month.slice(0,4)),Number(month.slice(5)
 // committed to it. `other` is discretionary recorded spending, so it belongs to
 // the overview ring rather than to a commitment total.
 export function expectedMonth(state,month) {
-  const row=projectYear(state).rows.find(r=>r.month===month);
-  if(!row)return {inPlan:false};
+  const projection=projectYear(state),row=projection.rows.find(r=>r.month===month);
+  const movements=scheduledTransactions(state).filter(t=>t.date.startsWith(month));
+  if(!row){
+    const next=projection.rows.find(r=>r.month>month&&(r.bank||r.mealCard));
+    return {inPlan:false,movements,...(next?{nextPayDate:next.payDate}:{})};
+  }
   const committed=row.recurring+row.loans+row.investments;
-  return {inPlan:true,payDate:row.payDate,bank:row.bank,mealCard:row.mealCard,committed,left:row.bank-committed};
+  return {inPlan:true,payDate:row.payDate,bank:row.bank,mealCard:row.mealCard,committed,left:row.bank-committed,movements};
 }
 export function defaultForecast(payroll) {
   const rows=[],december=`${payroll.month.slice(0,4)}-12`;

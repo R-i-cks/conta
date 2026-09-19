@@ -5,6 +5,7 @@ import errno
 import hashlib
 import json
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from functools import partial
@@ -12,6 +13,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import threading
 import urllib.request
+from urllib.parse import parse_qs, quote, urlsplit
 import webbrowser
 
 ROOT = Path(__file__).resolve().parent
@@ -25,6 +27,22 @@ HISTORY_DIR = ROOT / "history"
 HISTORY_KEEP = 30
 MAX_BODY = 20 * 1024 * 1024
 DATA_LOCK = threading.Lock()
+QUOTE_SYMBOL = re.compile(r"^[A-Z0-9.^=-]{1,20}$", re.I)
+
+
+def market_quote(symbol):
+    request = urllib.request.Request(
+        f"https://query2.finance.yahoo.com/v8/finance/chart/{quote(symbol)}?range=5d&interval=1d",
+        headers={"User-Agent": "Mozilla/5.0 Conta/1.0"})
+    with urllib.request.urlopen(request, timeout=8) as response:
+        result = json.load(response)["chart"]["result"][0]
+    meta = result["meta"]
+    price = meta.get("regularMarketPrice")
+    timestamp = meta.get("regularMarketTime")
+    if not isinstance(price, (int, float)) or price < 0 or not timestamp:
+        raise ValueError("No current quote")
+    return {"price": price, "currency": meta.get("currency"),
+            "date": datetime.fromtimestamp(timestamp, timezone.utc).date().isoformat()}
 
 
 def read_data():
@@ -132,14 +150,32 @@ class AppHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if not self.allowed_host():
             return
-        if self.path.split("?", 1)[0] == "/data":
+        parsed = urlsplit(self.path)
+        if parsed.path == "/quotes":
+            site, origin = self.headers.get("Sec-Fetch-Site"), self.headers.get("Origin")
+            if (site is not None and site not in ("same-origin", "none")) or (origin is not None and origin not in (f"http://{h}" for h in ALLOWED_HOSTS)):
+                self.send_error(403, "Conta only fetches quotes for its own page")
+                return
+            symbols = [value.strip().upper() for value in parse_qs(parsed.query).get("symbols", [""])[0].split(",") if value.strip()]
+            if not symbols or len(symbols) > 25 or any(not QUOTE_SYMBOL.fullmatch(symbol) for symbol in symbols):
+                self.send_error(400, "Choose up to 25 valid market tickers")
+                return
+            quotes, errors = {}, {}
+            for symbol in dict.fromkeys(symbols):
+                try:
+                    quotes[symbol] = market_quote(symbol)
+                except Exception:
+                    errors[symbol] = "Quote unavailable"
+            self.respond(200, json.dumps({"quotes": quotes, "errors": errors}).encode())
+            return
+        if parsed.path == "/data":
             body, etag = read_data()
             if body is None:
                 self.respond(404, b'{"error":"no workspace saved yet"}')
             else:
                 self.respond(200, body, headers=(("ETag", etag),))
             return
-        if self.path.split("?", 1)[0] == "/health":
+        if parsed.path == "/health":
             body = b"conta-local-v3"
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
@@ -188,7 +224,7 @@ def main():
         if not args.no_browser:
             webbrowser.open(URL)
         return
-    print(f"Conta is running at {URL}\nKeep this terminal open. Press Ctrl+C to stop.\nUse this same URL and browser profile to keep your saved data.", flush=True)
+    print(f"Conta is running at {URL}\nKeep this terminal open. Press Ctrl+C to stop.\nWorkspace: {DATA_FILE}", flush=True)
     if not args.no_browser:
         timer = threading.Timer(0.3, webbrowser.open, args=(URL,))
         timer.daemon = True

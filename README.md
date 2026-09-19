@@ -1,8 +1,32 @@
+<div align="center">
+
 # Conta
 
-A local personal finance tracker for mainland Portugal: cash accounts, investments, spending and 2026 IRS calculations. Python 3 is the only runtime requirement; no build, package install or bank credentials are needed. Fonts are bundled, so the app loads nothing from the internet.
+### A private, local-first finance tracker for life in Portugal
 
-## Launch locally
+**Cash flow · salary · IRS Jovem · loans · investments · PPRs**
+
+</div>
+
+> [!NOTE]
+> Conta is a fun side, vibe-coded project that grew from a simple need: one calm place to understand where my money is, what is due next, and what remains after it is paid.
+
+Conta brings cash accounts, transactions, salary planning, Portuguese tax estimates, loans and investments into one browser-based workspace. It runs on your computer, stores your records beside the app, and requires no bank credentials, build step or package installation.
+
+> [!IMPORTANT]
+> This is an independent planning tool, not financial, tax or investment advice. Check important figures against your payslip, lender, broker and official Portuguese sources.
+
+## Highlights
+
+| | |
+|---|---|
+| **See the month ahead** | Combine scheduled salary, bills and loan instalments before they are paid. |
+| **Understand Portuguese pay** | Estimate mainland withholding, Social Security, meal allowance, duodécimos and IRS Jovem. |
+| **Track the full picture** | Keep cash accounts, investments, PPRs, loans and net worth together. |
+| **Keep control of the data** | Save locally, export JSON backups and retain thirty previous workspace versions. |
+| **Refresh market holdings** | Opt in to delayed EUR quotes for exchange-traded stocks and ETFs. |
+
+## Quick start
 
 Double-click **Conta** on the desktop, or search for **Conta** in the Applications menu. It opens in your default browser without a terminal. The local server stays running in the background until you log out or restart; opening Conta again reuses it.
 
@@ -26,14 +50,14 @@ The first launch displays labelled sample records. Choose **Start my finances** 
 - Overview: the month's balance, money in, money out and tracked assets; **This month, expected** — the salary your plan plays out, the bills, instalments and contributions already committed to the month, and what is left of the deposit once they are paid; plus a ring showing every euro that left your accounts — loan instalments and monthly bills separated from discretionary categories, with investment contributions included even though they are not expenses.
 - Transactions: income and expenses, dates, categories, bank-account assignment, search, filters, editing, deletion and CSV export.
 - Accounts: current accounts, savings, brokerage cash and cash; an opening balance plus assigned activity determines each balance. Transfers move money between accounts without creating income or spending. Referenced accounts cannot be deleted until transactions are reassigned and transfers removed.
-- Portfolio: ETFs, stocks, funds, bonds, crypto and other holdings; fractional units, remaining cost basis, manual EUR prices, unrealised gain/loss, allocation and holdings CSV export.
+- Portfolio: ETFs, stocks, funds, bonds, crypto and other holdings; fractional units, remaining cost basis, optional delayed EUR market-price refresh, unrealised gain/loss, allocation and holdings CSV export.
 - Tracked assets: cash plus holdings, excluding loan balances. Brokerage account balances must contain cash only, so securities are not counted twice. Unassigned transactions do not affect account balances.
 - History: save daily cash/portfolio valuations; view their timeline and delete snapshots. Deposits, withdrawals and changes in holdings affect these values, so the history is not a time-weighted investment return.
 - Backups: JSON export/restore includes accounts, transfers, transactions, holdings, snapshots, both calculator settings, loans, monthly expense rules, salary plans, investment plans and contribution history. Version-1, version-2 and version-3 backups and existing saved transactions migrate without changing transaction amounts or dates.
 
 Dates are shown as dd/mm/yyyy throughout. CSV exports keep ISO `yyyy-mm-dd`, which spreadsheets parse the same way in every locale. Loan terms are shown in years and months alongside the payment count.
 
-Bank accounts and quotes are tracked manually. No bank login, live market feed, currency conversion or trading connection is used. Editing holdings does not post a cash movement or calculate realised gains. Record/reconcile cash changes separately.
+Bank accounts and statement-valued products are tracked manually. Exchange-traded holdings can opt into delayed quotes by using a market ticker such as `GALP.LS`, `SAN.MC` or `VWCE.DE`; automatic conversion from non-EUR listings is intentionally excluded. Quote refresh sends only those tickers to Yahoo Finance through the local server. No bank login or trading connection is used. Editing holdings does not post a cash movement or calculate realised gains. Record/reconcile cash changes separately.
 
 ## Monthly salary, meals and first-year benefits
 
@@ -75,11 +99,11 @@ The full-year projection assumes unchanged pay for a complete year. It distribut
 
 ## Integrated planning and available cash
 
-**Overview** and **Planning** show recorded account cash, reserved payments and available cash. Reservations include unpaid recurring bills, tracked loan instalments and investment contributions through the selected month, including overdue items. Future recorded expenses are reserved until their date. Expected salary and meal-card balances are not spendable cash until income is recorded. Linked payments recorded without an account stay reserved until assigned; assign them to reconcile your cash balance.
+**Overview** and **Planning** show recorded account cash, reserved payments and available cash. Reservations include unpaid recurring bills, tracked loan instalments and investment contributions through the selected month, including overdue items. Future recorded expenses are reserved until their date. Expected salary is excluded until recorded; meal-card balances are tracked separately and never offered for bills. Linked payments recorded without an account stay reserved until assigned; assign them to reconcile your cash balance.
 
 The payment list shows the twelve oldest due items and counts the rest, so a skipped year does not bury the page. Use **Record paid** for an individual due bill/loan, or **Record due payments** for all due bills and loan instalments. Each occurrence records once, deducts its assigned account, and releases its reservation without double counting. Investment contributions need the actual units or statement value, so they are recorded separately. Recording is manual; opening the app never silently posts payments. Remove any equivalent manually entered transaction before recording its scheduled occurrence. Deleting a posted expense keeps its posting history, so it is not automatically reposted.
 
-The salary plan has inclusive start/end dates inside one calendar year, 2026 or later, and a payday. Change gross salary, meal days and allowances month by month. The forecast counts paydays within the date range; it does not prorate entered monthly amounts. Allowances are assumed to arrive on the same payday. Monthly bank remainder subtracts recurring bills, loans, investment contributions and other recorded spending from expected salary; it is separate from available account cash. For 14 payments, holiday and Christmas amounts are entered separately (the initial plan assumes Christmas in December). For 12 payments, duodécimos are automatic.
+The salary plan has inclusive start/end dates inside one calendar year, 2026 or later, and a payday. Change gross salary, meal days and allowances month by month. The forecast counts paydays within the date range; it does not prorate entered monthly amounts. Allowances are assumed to arrive on the same payday. Choose salary and meal-card destination accounts in the salary settings, then record each due salary once from Planning. Monthly bank remainder subtracts recurring bills, loans, investment contributions and other recorded spending from expected salary; it is separate from available account cash. For 14 payments, holiday and Christmas amounts are entered separately (the initial plan assumes Christmas in December). For 12 payments, duodécimos are automatic.
 
 Recurring bills have start/end dates, a payment day, an optional account and pause/resume. Days 29–31 fall on the last day of shorter months. Resuming includes missed dates unless you change the start date. Changes affect unposted occurrences; posted transactions remain unchanged. Required and optional fields are labelled.
 
@@ -87,7 +111,7 @@ Recurring bills have start/end dates, a payment day, an optional account and pau
 
 In **Portfolio**, add a holding, then a **Contribution plan**: source account, monthly amount, payment day, start/end dates, investment value at the start and assumed annual effective growth rate. One plan per holding keeps the comparison unambiguous. Planned contributions reserve cash and appear in Planning. **Record contribution** records the amount paid, actual units received and valuation; it increases cost basis and deducts cash without classifying an investment purchase as everyday spending. Do not also enter it as an expense.
 
-Holdings support **units × unit price** or **total statement value**. The latter supports insurance PPRs, deposits and managed portfolios without inventing a ticker or unit count. **Add Santander PPR** prefills the product name, provider and category for Seguro PPR+ Ações; you enter your own cost basis and statement value. It creates no bank connection and requires no bank credentials or policy number. For this insurance product, use your statement's total value or its units and unit value when available. See the [official Seguro PPR+ Ações page](https://www.santander.pt/poupanca-reforma/seguro-ppr-acoes). For ordinary Santander investment funds, the [Fund Centre](https://www.santanderassetmanagement.pt/tools) publishes fund identifiers and unit values. These are different product sources.
+Holdings support **units × unit price** or **total statement value**. Unit-based EUR listings can refresh automatically when Conta opens; quotes may be delayed or temporarily unavailable. Total statement value supports insurance PPRs, deposits and managed portfolios without inventing a ticker or unit count. **Add PPR** selects the appropriate category and statement-value method while leaving the product and provider open to any bank, insurer or broker. Enter your own remaining cost basis and the latest statement value; no bank credentials, policy number or account number are required.
 
 The projection applies the annual effective rate between dated contributions using a 365.25-day year. Enter a rate after ongoing fees, before tax; negative rates are supported. Projection results separate initial value, contributions and growth. The actual comparison uses the holding's manually entered valuation date, and shows actual versus planned contributions so a shortfall is not mistaken for poor investment performance. Returns are not guaranteed. Withdrawals, tax relief, redemption fees and taxes are outside the projection. Editing a plan recalculates its projection rather than preserving an old target.
 
@@ -137,7 +161,7 @@ Verified 18 September 2026. These rules apply to **2026 income**, not 2025 retur
 
 ## Data and checks
 
-Financial records remain in browser localStorage under `conta-v1` (schema version 4). Cash amounts use integer cents. No account or cloud sync is required. Clearing browser data deletes records: keep JSON backups from **Your data**. Fonts may load from Google Fonts, with system-font fallback offline; no financial records are sent there. The local launcher binds only to loopback and serves the app's public files.
+Financial records live in `conta-data.json` (schema version 4), written atomically with the previous thirty versions in `history/`; browser localStorage under `conta-v1` is a recovery cache. Cash amounts use integer cents. No account or cloud sync is required. Keep copies of the data file or JSON backups from **Your data**. Fonts are bundled. The only optional outbound requests are ticker-only market quote lookups for holdings where automatic prices are enabled. The local launcher binds only to loopback and serves an explicit allowlist of public files.
 
 Run financial logic and migration checks:
 
@@ -145,15 +169,11 @@ Run financial logic and migration checks:
 node core.test.mjs
 ```
 
-Optional browser checks, with the app running:
+Optional browser checks start their own server and use a temporary workspace:
 
 ```sh
 uv run --with playwright python -m playwright install chromium
 uv run --with playwright python browser_test.py
 ```
 
-Checks cover annual and monthly bracket boundaries, SS, IRS Jovem caps/eligibility, meal-card/cash treatment, 12/14 schedules, transfers, portfolio valuation, migration, backup validation, annuity/principal conservation, one-off and recurring overpayments, fee caps/waivers, duplicate-proof expense posting, year-end forecasts and exports. Browser checks use isolated test storage and cover desktop/mobile layout and the complete user flows.
-
-## GitHub preparation
-
-See [GITHUB.md](GITHUB.md) for repository contents, private-data handling, secret/environment requirements and hosting considerations. No environment variables or credentials are required for this local version.
+Checks cover annual and monthly bracket boundaries, SS, IRS Jovem caps/eligibility, meal-card/cash treatment, 12/14 schedules, transfers, portfolio valuation, migration, backup validation, annuity/principal conservation, one-off and recurring overpayments, fee caps/waivers, duplicate-proof expense and salary posting, year-end forecasts and exports. Browser checks use an isolated workspace and cover desktop/mobile layout and the complete user flows.

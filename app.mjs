@@ -1,7 +1,7 @@
 import {validateInvestmentPlan,projectInvestment,recordContribution,undoContribution} from './investments.mjs';
 import {LOAN_KINDS, amortize, compareLoan, loanDates, dueDate} from './loans.mjs';
-import {defaultForecast, validateForecast, projectYear, pendingPayments, cashPlan, postDueExpenses, expectedMonth} from './planning.mjs';
-import {BRACKETS, CATEGORIES, ASSET_TYPES, cents, calculateTax, totals, monthlyOutflows, validateState, toCSV, csvCell, accountBalances, portfolio, dateLabel, monthLabel, termLabel} from './core.mjs';
+import {defaultForecast, validateForecast, projectYear, pendingPayments, cashPlan, postDueExpenses, postSalary, scheduledTransactions, expectedMonth} from './planning.mjs';
+import {BRACKETS, CATEGORIES, ASSET_TYPES, CARD_KIND, cents, calculateTax, totals, monthlyOutflows, validateState, toCSV, csvCell, accountBalances, portfolio, dateLabel, monthLabel, termLabel} from './core.mjs';
 import {calculatePayroll, annualTaxableEstimate, YOUTH_CAP} from './payroll.mjs';
 const $ = selector => document.querySelector(selector);
 const money = value => new Intl.NumberFormat('pt-PT', {style:'currency',currency:'EUR'}).format(value / 100);
@@ -33,7 +33,7 @@ function toast(message, persistent=false) {
 }
 // The file the launcher keeps next to the app is the record. localStorage is a
 // cache, so a blocked or full browser store no longer costs you your finances.
-let state, etag=null, storageBlocked=false;
+let state, etag=null, storageBlocked=false, refreshingPrices=false;
 // The cache also records which server version it was last written against, so
 // work saved but not yet accepted by the server survives a reload or a crash.
 const MARK=KEY+':sync';
@@ -122,7 +122,8 @@ function route() {
 }
 const icons={Salary:'↙','Other income':'↙',Housing:'⌂',Groceries:'▧',Transport:'↔',Dining:'♧',Shopping:'◇',Health:'＋',Leisure:'♫',Utilities:'ϟ',Other:'·'};
 function sorted(transactions) {return [...transactions].sort((a,b)=>b.date.localeCompare(a.date)||b.id.localeCompare(a.id));}
-function filtered() {const query=$('#search').value.toLowerCase(); const month=$('#transaction-month').value;const type=$('#type-filter').value;return sorted(state.transactions.filter(t=>(!month||t.date.startsWith(month))&&(type==='all'||t.type===type)&&`${t.description} ${t.category}`.toLowerCase().includes(query)));}
+function allTransactions() {return [...state.transactions,...scheduledTransactions(state)];}
+function filtered() {const query=$('#search').value.toLowerCase(); const month=$('#transaction-month').value;const type=$('#type-filter').value;return sorted(allTransactions().filter(t=>(!month||t.date.startsWith(month))&&(type==='all'||t.type===type)&&`${t.description} ${t.category}`.toLowerCase().includes(query)));}
 function renderOverview() {
   const month=$('#overview-month').value || today().slice(0,7);
   renderCashSummary('#overview-cash',month);
@@ -149,7 +150,7 @@ function renderOverview() {
 }
 // The landing page must survive an unsaved or invalid salary plan.
 function renderExpectedMonth(month) {
-  const figures=$('#overview-expected'),note=$('#overview-expected-note');
+  const figures=$('#overview-expected'),note=$('#overview-expected-note'),movements=$('#overview-expected-movements');
   try {
     const e=expectedMonth(state,month);
     figures.hidden=!e.inPlan;
@@ -157,16 +158,20 @@ function renderExpectedMonth(month) {
       .map(([label,value])=>`<div><span>${label}</span><strong class="${value<0?'negative':''}">${money(value)}</strong></div>`).join(''):'';
     note.textContent=e.inPlan
       ?`Expected salary on ${dateLabel(e.payDate)}, less this month’s monthly bills, loan instalments and investment contributions, whether recorded yet or not. Meal-card value is not spendable cash, and everyday spending is not counted here.`
-      :'No salary plan covers this month. Set one in Planning to see the month ahead.';
+      :e.nextPayDate?`No salary plan covers this month. The next planned salary is ${dateLabel(e.nextPayDate)}.`:'No salary plan covers this month. Set one in Planning to see the month ahead.';
+    movements.hidden=!e.movements.length;
+    movements.innerHTML=e.movements.map(m=>`<div class="recent-item"><span class="category-icon" aria-hidden="true">${icons[m.category]||icons.Other}</span><div><h3>${escape(m.description)}</h3><p>${m.kind==='salary'?'Planned salary':'Scheduled loan payment'} · ${dateLabel(m.date)}</p></div><strong class="amount ${m.type}">${m.type==='income'?'+':'−'}${money(m.amount)}</strong></div>`).join('');
   } catch(error) {
     figures.hidden=true;figures.innerHTML='';
+    movements.hidden=true;movements.innerHTML='';
     note.textContent='This month cannot be projected until your salary plan is valid: '+error.message;
   }
 }
 function renderTransactions() {
   const entries=filtered();const total=totals(entries);
-  $('#transaction-summary').textContent=`${entries.length} transaction${entries.length===1?'':'s'} · Income ${money(total.income)} · Expenses ${money(total.expense)} · Balance ${money(total.balance)}`;
-  $('#transaction-rows').innerHTML=entries.map(t=>`<tr><td>${escape(t.description)}</td><td><span class="pill">${escape(t.category)}</span></td><td>${escape(accountName(t.accountId))}</td><td>${dateLabel(t.date)}</td><td class="right amount ${t.type}">${t.type==='income'?'+':'−'}${money(t.amount)}</td><td><button class="icon-button" data-edit="${escape(t.id)}" aria-label="Edit ${escape(t.description)}">Edit</button><button class="icon-button" data-delete="${escape(t.id)}" aria-label="Delete ${escape(t.description)}">×</button></td></tr>`).join('');
+  const scheduled=entries.filter(t=>t.scheduled).length;
+  $('#transaction-summary').textContent=`${entries.length} transaction${entries.length===1?'':'s'} · ${entries.length-scheduled} recorded · ${scheduled} scheduled · Income ${money(total.income)} · Expenses ${money(total.expense)} · Balance ${money(total.balance)}`;
+  $('#transaction-rows').innerHTML=entries.map(t=>`<tr><td>${escape(t.description)}</td><td><span class="pill">${escape(t.category)}</span></td><td>${escape(accountName(t.accountId))}</td><td>${dateLabel(t.date)}</td><td class="right amount ${t.type}">${t.type==='income'?'+':'−'}${money(t.amount)}</td><td>${t.scheduled?'<span class="pill">Scheduled</span>':`<button class="icon-button" data-edit="${escape(t.id)}" aria-label="Edit ${escape(t.description)}">Edit</button><button class="icon-button" data-delete="${escape(t.id)}" aria-label="Delete ${escape(t.description)}">×</button>`}</td></tr>`).join('');
   $('#no-transactions').hidden=entries.length>0;
 }
 function renderTax() {
@@ -202,7 +207,7 @@ form.addEventListener('submit',event=>{
       recurring=[...recurring,{id:t.recurringId,description:t.description,amount:t.amount,category:t.category,accountId:t.accountId,start:t.date,end:'',day:Number(t.date.slice(8)),enabled:true,posted:[t.occurrence]}];
     }
     const transactions=data.id?state.transactions.map(old=>old.id===data.id?t:old):[...state.transactions,t];
-    if(save({...state,transactions,recurring})) {dialog.close();render();toast('Transaction saved'+(state.demo?' in the sample workspace.':'.'));} else $('#transaction-error').textContent='Could not save. Check browser storage; your previous data is unchanged.';
+    if(save({...state,transactions,recurring})) {dialog.close();render();toast('Transaction saved'+(state.demo?' in the sample workspace.':'.'));} else $('#transaction-error').textContent='Could not save. Check the save warning; your previous data is unchanged.';
   } catch(error) {$('#transaction-error').textContent=error.message;}
 });
 $('#transaction-rows').addEventListener('click',event=>{
@@ -246,7 +251,7 @@ window.addEventListener('hashchange',route);
 // Reload changes from another tab rather than allowing an old tab to overwrite them.
 window.addEventListener('storage',event=>{if(event.key!==KEY&&event.key!==null)return;try{state=event.newValue?validateState(JSON.parse(event.newValue)):emptyState();storageBlocked=false;render();toast('Workspace updated in another tab.');}catch{storageBlocked=true;toast('Saved data could not be read. Export a backup before resetting this workspace.',true);}});
 function accountName(id) {return state.accounts.find(a=>a.id===id)?.name||'Unassigned';}
-function accountOptions() {return state.accounts.map(a=>`<option value="${escape(a.id)}">${escape(a.name)}</option>`).join('');}
+function accountOptions(filter=()=>true) {return state.accounts.filter(filter).map(a=>`<option value="${escape(a.id)}">${escape(a.name)}</option>`).join('');}
 function renderWealth() {
   const balances=accountBalances(state,today()),investments=portfolio(state.holdings);
   const cash=[...balances.values()].reduce((sum,value)=>sum+value,0);
@@ -260,9 +265,11 @@ function renderWealth() {
   $('#portfolio-value').textContent=money(investments.value);$('#portfolio-cost').textContent=money(investments.cost);$('#portfolio-gain').textContent=(investments.gain>0?'+':'')+money(investments.gain);
   $('#portfolio-gain').className='stat-number '+(investments.gain<0?'negative':'positive');
   $('#portfolio-return').textContent=investments.returnPct===null?'Add cost basis to calculate a return':percent(investments.returnPct)+' on remaining cost basis';
-  $('#portfolio-count').textContent=`${state.holdings.length} holding${state.holdings.length===1?'':'s'} · Manual price updates`;
+  const automatic=state.holdings.filter(h=>h.autoPrice).length;
+  $('#portfolio-count').textContent=`${state.holdings.length} holding${state.holdings.length===1?'':'s'} · ${automatic} automatic`;
+  $('#refresh-prices').disabled=refreshingPrices||!automatic;
   $('#holdings-empty').hidden=state.holdings.length>0;
-  $('#holding-rows').innerHTML=investments.positions.map(h=>`<tr><td><strong>${escape(h.symbol||h.name)}</strong><small class="cell-note">${escape(h.name)}<br>${escape(h.broker)} · ${escape(h.kind)}</small></td><td>${h.valuation==='balance'?'—':h.units.toLocaleString('en-GB',{maximumFractionDigits:8})}</td><td>${h.valuation==='balance'?'Statement total':h.price.toLocaleString('pt-PT',{minimumFractionDigits:2,maximumFractionDigits:6})+' €'}</td><td>${money(h.value)}</td><td class="${h.gain<0?'negative':'positive'}">${money(h.gain)}<small class="cell-note">${h.returnPct===null?'No cost basis':percent(h.returnPct)}</small></td><td>${dateLabel(h.updated)}${Date.now()-Date.parse(h.updated+'T23:59:59')>7*86400000?'<small class="cell-note">Update price</small>':''}</td><td><button class="icon-button" data-holding-edit="${escape(h.id)}" aria-label="Edit ${escape(h.symbol||h.name)}">Edit</button><button class="icon-button" data-holding-delete="${escape(h.id)}" aria-label="Delete ${escape(h.symbol||h.name)}">Delete</button></td></tr>`).join('');
+  $('#holding-rows').innerHTML=investments.positions.map(h=>`<tr><td><strong>${escape(h.symbol||h.name)}</strong><small class="cell-note">${escape(h.name)}<br>${escape(h.broker)} · ${escape(h.kind)}</small></td><td>${h.valuation==='balance'?'—':h.units.toLocaleString('en-GB',{maximumFractionDigits:8})}</td><td>${h.valuation==='balance'?'Statement total':h.price.toLocaleString('pt-PT',{minimumFractionDigits:2,maximumFractionDigits:6})+' €'}</td><td>${money(h.value)}</td><td class="${h.gain<0?'negative':'positive'}">${money(h.gain)}<small class="cell-note">${h.returnPct===null?'No cost basis':percent(h.returnPct)}</small></td><td>${dateLabel(h.updated)}${h.autoPrice?'<small class="cell-note">Automatic</small>':Date.now()-Date.parse(h.updated+'T23:59:59')>7*86400000?'<small class="cell-note">Update price</small>':''}</td><td><button class="icon-button" data-holding-edit="${escape(h.id)}" aria-label="Edit ${escape(h.symbol||h.name)}">Edit</button><button class="icon-button" data-holding-delete="${escape(h.id)}" aria-label="Delete ${escape(h.symbol||h.name)}">Delete</button></td></tr>`).join('');
   const colors=['#345f43','#96ae72','#cfdaa7','#e3bb95','#9baeb1','#bbb39a'];
   const allocations=ASSET_TYPES.map(kind=>({kind,value:investments.positions.filter(h=>h.kind===kind).reduce((sum,h)=>sum+h.value,0)})).filter(a=>a.value>0);
   $('#allocation').innerHTML=allocations.map((a,i)=>`<div class="allocation-row"><div><span>${a.kind}</span><strong>${percent(a.value/investments.value*100)}</strong></div><div class="allocation-track"><div style="width:${a.value/investments.value*100}%;background:${colors[i]}"></div></div><small>${money(a.value)}</small></div>`).join('')||'<p class="empty">Your asset mix will appear here.</p>';
@@ -282,7 +289,7 @@ function openRecord(formId,values) {
 }
 function commitRecord(f,next) {
   validateState(next);
-  if(!save(next)) throw new Error('Could not save. Check browser storage; your previous data is unchanged.');
+  if(!save(next)) throw new Error('Could not save. Check the save warning; your previous data is unchanged.');
   f.closest('dialog').close();render();toast('Saved'+(state.demo?' in the sample workspace.':'.'));
 }
 document.querySelectorAll('[data-close]').forEach(button=>button.addEventListener('click',()=>button.closest('dialog').close()));
@@ -299,7 +306,7 @@ $('#account-form').addEventListener('submit',event=>{
 $('#account-cards').addEventListener('click',event=>{
   const edit=event.target.closest('[data-account-edit]');if(edit){const a=state.accounts.find(a=>a.id===edit.dataset.accountEdit);return openRecord('account-form',{...a,opening:(a.opening/100).toFixed(2)});}
   const remove=event.target.closest('[data-account-delete]');if(!remove)return;const id=remove.dataset.accountDelete;
-  if(state.transactions.some(t=>t.accountId===id)||state.transfers.some(t=>t.from===id||t.to===id)||state.recurring.some(r=>r.accountId===id)||state.loans.some(l=>l.accountId===id)||state.investmentPlans.some(p=>p.accountId===id)||state.contributions.some(c=>c.accountId===id))return toast('Reassign this account’s transactions, investments, loans and monthly expenses, and remove its transfers before deleting it.');
+  if(state.transactions.some(t=>t.accountId===id)||state.transfers.some(t=>t.from===id||t.to===id)||state.recurring.some(r=>r.accountId===id)||state.loans.some(l=>l.accountId===id)||state.investmentPlans.some(p=>p.accountId===id)||state.contributions.some(c=>c.accountId===id)||[state.payroll.bankAccountId,state.payroll.mealAccountId].includes(id))return toast('Reassign this account’s transactions, salary, investments, loans and monthly expenses, and remove its transfers before deleting it.');
   if(confirm('Delete this account and its opening balance?')&&save({...state,accounts:state.accounts.filter(a=>a.id!==id)}))render();
 });
 $('#add-transfer').addEventListener('click',()=>{
@@ -316,7 +323,7 @@ $('#transfer-rows').addEventListener('click',event=>{const button=event.target.c
 $('#add-holding').addEventListener('click',()=>openHolding());
 $('#holding-form').addEventListener('submit',event=>{
   event.preventDefault();const f=event.currentTarget;try{const v=Object.fromEntries(new FormData(f));
-    const holding={...v,id:v.id||crypto.randomUUID(),name:v.name.trim(),symbol:v.symbol.trim(),broker:v.broker.trim(),valuation:v.valuation,units:v.valuation==='balance'?1:Number(v.units),price:Number(v.price),cost:cents(v.cost)};
+    const holding={...v,id:v.id||crypto.randomUUID(),name:v.name.trim(),symbol:v.symbol.trim().toUpperCase(),broker:v.broker.trim(),valuation:v.valuation,autoPrice:v.valuation==='units'&&!!v.autoPrice,units:v.valuation==='balance'?1:Number(v.units),price:Number(v.price),cost:cents(v.cost)};
     if(v.updated>today())throw new Error('Price date cannot be in the future.');
     if(v.id&&!state.holdings.some(h=>h.id===v.id))throw new Error('This holding was removed in another tab.');
     commitRecord(f,{...state,holdings:v.id?state.holdings.map(h=>h.id===v.id?holding:h):[...state.holdings,holding]});
@@ -336,6 +343,28 @@ $('#export-holdings').addEventListener('click',()=>{
   const rows=[['Name','Ticker','Broker','Asset class','Units','Cost basis EUR','Unit price EUR','Value EUR','Unrealised gain EUR','Price date'],...portfolio(state.holdings).positions.map(h=>[h.name,h.symbol,h.broker,h.kind,h.units,(h.cost/100).toFixed(2),h.price,(h.value/100).toFixed(2),(h.gain/100).toFixed(2),h.updated])];
   download(`conta-holdings-${today()}.csv`,'\uFEFF'+rows.map(row=>row.map(csvCell).join(',')).join('\r\n'),'text/csv;charset=utf-8');
 });
+async function refreshPrices(manual=false){
+  const tracked=state.holdings.filter(h=>h.autoPrice&&h.valuation==='units'&&h.symbol);
+  if(!tracked.length){if(manual)toast('Enable automatic pricing on a ticker-based holding first.');return;}
+  if(refreshingPrices)return;
+  refreshingPrices=true;renderWealth();
+  try{
+    const response=await fetch('/quotes?symbols='+encodeURIComponent([...new Set(tracked.map(h=>h.symbol))].join(',')),{cache:'no-store'});
+    if(!response.ok)throw new Error(`Server answered ${response.status}`);
+    const result=await response.json();let changed=0,nonEuro=0;
+    const holdings=state.holdings.map(h=>{
+      const q=result.quotes[h.symbol];
+      if(!h.autoPrice||!q)return h;
+      if(q.currency!=='EUR'){nonEuro++;return h;}
+      if(q.date<h.updated||(q.date===h.updated&&q.price===h.price))return h;
+      changed++;return {...h,price:q.price,updated:q.date};
+    });
+    if(changed&&save({...state,holdings}))renderWealth();
+    if(manual)toast(changed?`Updated ${changed} market price${changed===1?'':'s'}.`:nonEuro?'Only EUR-listed tickers can update automatically.':'Prices are already current or unavailable.');
+  }catch(error){if(manual)toast('Could not refresh market prices: '+error.message,true);}
+  finally{refreshingPrices=false;renderWealth();}
+}
+$('#refresh-prices').addEventListener('click',()=>refreshPrices(true));
 const payrollForm=$('#payroll-form');
 function toggleYouth() {
   const on=payrollForm.elements.youth.checked;$('#youth-fields').hidden=!on;
@@ -343,9 +372,11 @@ function toggleYouth() {
   payrollForm.elements.age.required=on;payrollForm.elements.eligible.required=on;
 }
 function renderPayroll() {
+  payrollForm.elements.bankAccountId.innerHTML='<option value="">Unassigned</option>'+accountOptions(a=>a.kind!==CARD_KIND);
+  payrollForm.elements.mealAccountId.innerHTML='<option value="">Unassigned</option>'+accountOptions(a=>a.kind===CARD_KIND);
   for(const [key,value] of Object.entries(state.payroll)) {
     const input=payrollForm.elements.namedItem(key);
-    if(!input)continue; // Settings without a field of their own, such as salary destinations.
+    if(!input)continue;
     if(typeof value==='boolean')input.checked=value;
     else input.value=['gross','mealDaily'].includes(key)?(value/100).toFixed(2):key==='age'&&value===0?'':value;
   }
@@ -377,9 +408,9 @@ payrollForm.elements.youth.addEventListener('change',toggleYouth);
 payrollForm.addEventListener('submit',event=>{
   event.preventDefault();$('#payroll-error').textContent='';try{
     const v=Object.fromEntries(new FormData(payrollForm));
-    const payroll={gross:cents(v.gross),mealDaily:cents(v.mealDaily),mealDays:Number(v.mealDays),mealMethod:v.mealMethod,annualMealDays:Number(v.annualMealDays),month:v.month,family:v.family,dependants:Number(v.dependants),payments:Number(v.payments),youth:!!v.youth,age:Number(v.age||0),careerYear:Number(v.careerYear||1),eligible:!!v.eligible,employerApplied:!!v.employerApplied};
+    const payroll={gross:cents(v.gross),mealDaily:cents(v.mealDaily),mealDays:Number(v.mealDays),mealMethod:v.mealMethod,annualMealDays:Number(v.annualMealDays),month:v.month,family:v.family,dependants:Number(v.dependants),payments:Number(v.payments),youth:!!v.youth,age:Number(v.age||0),careerYear:Number(v.careerYear||1),eligible:!!v.eligible,employerApplied:!!v.employerApplied,bankAccountId:v.bankAccountId||null,mealAccountId:v.mealAccountId||null};
     calculatePayroll(payroll);
-    if(save({...state,payroll})){renderPayroll();renderPlanning();renderOverview();toast('Take-home estimate updated.');}else $('#payroll-error').textContent='Could not save your salary settings. Check browser storage.';
+    if(save({...state,payroll})){renderPayroll();renderPlanning();renderOverview();toast('Take-home estimate updated.');}else $('#payroll-error').textContent='Could not save your salary settings. Check the save warning.';
   }catch(error){$('#payroll-error').textContent=error.message;}
 });
 const eurInput=value=>(value/100).toFixed(2);
@@ -414,13 +445,23 @@ function renderCashSummary(target,month){
 function renderPaymentPlan(){
   const month=$('#budget-month').value||today().slice(0,7),plan=cashPlan(state,month,today());
   renderCashSummary('#planning-cash',month);
-  const salary=projectYear(state).rows.find(r=>r.month===month);
-  $('#next-payday').textContent=salary&&salary.bank?`Expected salary: ${money(salary.bank)} on ${dateLabel(salary.payDate)}. Record the deposit in Transactions when received; it is not added to available cash automatically.`:'No salary payday in this month’s saved plan.';
+  const salary=projectYear(state).rows.find(r=>r.month===month),payday=$('#next-payday');
+  if(!salary||(!salary.bank&&!salary.mealCard))payday.textContent='No salary payday in this month’s saved plan.';
+  else {
+    const posted=state.forecast.posted.includes(month),missing=salary.bank&&!state.payroll.bankAccountId||salary.mealCard&&!state.payroll.mealAccountId;
+    const destinations=[salary.bank&&`${money(salary.bank)} to ${escape(accountName(state.payroll.bankAccountId))}`,salary.mealCard&&`${money(salary.mealCard)} to ${escape(accountName(state.payroll.mealAccountId))}`].filter(Boolean).join(' and ');
+    payday.innerHTML=`Expected ${destinations} on ${dateLabel(salary.payDate)}. ${posted?'Recorded.':missing?'<a href="#tax">Choose the salary destinations</a> before recording.':`<button class="text-button" data-post-salary="${month}" ${salary.payDate>today()?'disabled':''}>Record salary</button>`}`;
+  }
   const shown=plan.pending.slice(0,12),hidden=plan.pending.length-shown.length;
   $('#payment-list').innerHTML=plan.pending.length?shown.map(p=>`<div class="commitment-row payment-row"><div><strong>${escape(p.description)}</strong><small>${p.kind==='loan'?'Loan instalment':p.kind==='investment'?'Investment contribution':'Monthly expense'} · ${dateLabel(p.date)} · ${escape(accountName(p.accountId))}${p.date<today()?' · Overdue':''}</small></div><strong>${money(p.amount)}</strong><div><button class="button secondary" data-payment-kind="${p.kind}" data-payment-source="${escape(p.sourceId)}" data-payment-month="${p.month}" ${p.date>today()?'disabled':''}>${p.kind==='investment'?'Record contribution':'Record paid'}</button></div></div>`).join('')+(hidden?`<p class="scope-note">${hidden} older due payment${hidden===1?'':'s'} not listed. Record these, or use Record due payments to post every due bill and instalment at once.</p>`:''):'<p class="empty">No unpaid commitments through this month.</p>';
 }
 $('#budget-month').value=today().slice(0,7);
 $('#budget-month').addEventListener('change',()=>{if($('#budget-month').value&&$('#budget-month').checkValidity())renderPaymentPlan();});
+$('#next-payday').addEventListener('click',event=>{
+  const button=event.target.closest('[data-post-salary]');if(!button)return;
+  try{const next=postSalary(state,button.dataset.postSalary,today(),()=>crypto.randomUUID());if(next!==state&&save(next)){render();toast('Salary recorded.');}}
+  catch(error){toast(error.message,true);}
+});
 $('#payment-list').addEventListener('click',event=>{
   const b=event.target.closest('[data-payment-kind]');if(!b)return;
   if(b.dataset.paymentKind==='investment')return openContribution(state.investmentPlans.find(p=>p.id===b.dataset.paymentSource),b.dataset.paymentMonth);
@@ -438,12 +479,13 @@ for(const id of ['forecast-start','forecast-end'])$('#'+id).addEventListener('ch
   renderForecastInputs(fresh);
 });
 $('#reset-forecast').addEventListener('click',()=>{
-  if(confirm('Replace this salary plan with your saved salary settings? Monthly expenses and loans stay unchanged.')&&save({...state,forecast:defaultForecast(state.payroll)}))render();
+  const forecast={...defaultForecast(state.payroll),posted:[...state.forecast.posted]};
+  if(confirm('Replace this salary plan with your saved salary settings? Monthly expenses and loans stay unchanged.')&&save({...state,forecast}))render();
 });
 $('#forecast-form').addEventListener('submit',event=>{
   event.preventDefault();try{
     const rows=[...$('#forecast-inputs').rows].map(tr=>{const row={month:tr.dataset.month};for(const input of tr.querySelectorAll('input'))row[input.dataset.field]=input.dataset.field==='mealDays'?Number(input.value):cents(input.value||'0');return row;});
-    const forecast={start:$('#forecast-start').value,end:$('#forecast-end').value,payDay:Number($('#forecast-payday').value),rows};validateForecast(forecast);projectYear(state,forecast);
+    const forecast={start:$('#forecast-start').value,end:$('#forecast-end').value,payDay:Number($('#forecast-payday').value),posted:[...state.forecast.posted],rows};validateForecast(forecast);projectYear(state,forecast);
     if(save({...state,forecast})){render();toast('Expected salary plan saved.');}
   }catch(error){$('#forecast-error').textContent=error.message;}
 });
@@ -557,15 +599,16 @@ $('#export-loan').addEventListener('click',()=>{
 });
 
 function openHolding(values={id:'',updated:today(),kind:'ETF',valuation:'units',units:0,cost:'0.00'}){
-  openRecord('holding-form',values);toggleHoldingValuation();
+  openRecord('holding-form',values);$('#holding-form').elements.autoPrice.checked=!!values.autoPrice;toggleHoldingValuation();
 }
 function toggleHoldingValuation(){
   const f=$('#holding-form'),balance=f.elements.valuation.value==='balance';
   $('#holding-units-label').hidden=balance;f.elements.units.disabled=balance;
+  f.elements.autoPrice.disabled=balance;if(balance)f.elements.autoPrice.checked=false;
   $('#holding-price-label').textContent=balance?'Current total statement value (€)':'Current unit price (€)';
 }
 $('#holding-form').elements.valuation.addEventListener('change',toggleHoldingValuation);
-$('#add-ppr').addEventListener('click',()=>openHolding({id:'',name:'Seguro PPR+ Ações',broker:'Santander Totta Seguros',kind:'PPR / Insurance',valuation:'balance',units:1,cost:'0.00',updated:today()}));
+$('#add-ppr').addEventListener('click',()=>openHolding({id:'',name:'',broker:'',kind:'PPR / Insurance',valuation:'balance',units:1,cost:'0.00',updated:today()}));
 function holdingOptions(){return state.holdings.map(h=>`<option value="${escape(h.id)}">${escape(h.name)}</option>`).join('');}
 function renderInvestments(){
   $('#add-investment-plan').disabled=!state.holdings.length;$('#add-contribution').disabled=!state.holdings.length;
@@ -637,4 +680,5 @@ $('#contribution-rows').addEventListener('click',event=>{
 });
 
 render();
+refreshPrices();
 if(storageBlocked)toast('Saved data is unreadable or storage is unavailable. Existing storage has not been overwritten. Check Your data before continuing.',true);

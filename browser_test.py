@@ -13,6 +13,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from datetime import date
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
@@ -145,13 +146,18 @@ with sync_playwright() as p:
     expect(page.locator("#total-cash")).to_contain_text("500,29")
 
     page.locator('nav a[href="#portfolio"]').click()
+    page.route("**/quotes?**", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"quotes":{"TEST":{"price":125,"currency":"EUR","date":date.today().isoformat()}},"errors":{}})))
     page.locator("#add-holding").click()
     holding = page.locator("#holding-form")
     for name, value in {"name":"Test ETF", "symbol":"TEST", "broker":"Broker", "units":"2.5", "price":"120", "cost":"250"}.items():
         holding.locator(f'[name="{name}"]').fill(value)
+    holding.locator('[name="autoPrice"]').check()
     holding.get_by_role("button", name="Save investment").click()
     expect(page.locator("#portfolio-value")).to_contain_text("300,00")
     expect(page.locator("#portfolio-gain")).to_contain_text("50,00")
+    page.locator("#refresh-prices").click()
+    expect(page.locator("#portfolio-value")).to_contain_text("312,50")
+    expect(page.locator("#holding-rows")).to_contain_text("Automatic")
     page.get_by_role("button", name="Edit TEST", exact=True).click()
     holding.locator('[name="price"]').fill("130")
     holding.get_by_role("button", name="Save investment").click()
@@ -168,9 +174,20 @@ with sync_playwright() as p:
     page.set_viewport_size({"width": 1440, "height": 1100})
 
     # The requested salary profile: age 24, first eligible year, meal card.
+    page.locator('nav a[href="#accounts"]').click()
+    for name, kind in [("Salary account", "Current"), ("Meal card", "Meal card")]:
+        page.locator("#add-account").click()
+        account = page.locator("#account-form")
+        account.locator('[name="name"]').fill(name)
+        account.locator('[name="bank"]').fill("Test bank")
+        account.locator('[name="kind"]').select_option(kind)
+        account.locator('[name="opening"]').fill("0")
+        account.get_by_role("button", name="Save account").click()
     page.locator('nav a[href="#tax"]').click()
     payroll = page.locator("#payroll-form")
     payroll.locator('[name="gross"]').fill("1300")
+    payroll.locator('[name="bankAccountId"]').select_option(label="Salary account")
+    payroll.locator('[name="mealAccountId"]').select_option(label="Meal card")
     payroll.locator('[name="mealDaily"]').fill("9.60")
     payroll.locator('[name="mealDays"]').fill("22")
     payroll.locator('[name="youth"]').check()
@@ -198,7 +215,7 @@ with sync_playwright() as p:
         page.locator("#backup").click()
     backup = Path(download_info.value.path()).read_bytes()
     assert len(json.loads(backup)["transactions"]) == 2
-    assert len(json.loads(backup)["accounts"]) == 2
+    assert len(json.loads(backup)["accounts"]) == 4
     assert len(json.loads(backup)["holdings"]) == 1
     page.locator("#clear-data").click()
     page.locator("#restore").set_input_files({"name": "backup.json", "mimeType": "application/json", "buffer": backup})
@@ -212,9 +229,9 @@ with sync_playwright() as p:
 
     page.locator('nav a[href="#transactions"]').click()
     page.get_by_role("button", name="Delete Salary test", exact=True).click()
-    expect(page.locator("#transaction-rows tr")).to_have_count(1)
+    expect(page.locator("#transaction-rows tr").filter(has_not_text="Scheduled")).to_have_count(1)
     page.reload()
-    expect(page.locator("#transaction-rows tr")).to_have_count(1)
+    expect(page.locator("#transaction-rows tr").filter(has_not_text="Scheduled")).to_have_count(1)
     page.set_viewport_size({"width": 320, "height": 700})
     page.screenshot(path="/tmp/conta-narrow.png", full_page=True)
     if page.evaluate("document.documentElement.scrollWidth > innerWidth"):
@@ -321,9 +338,20 @@ with sync_playwright() as p:
     scenario.locator('[name="feeRate"]').fill("0")
     expect(page.locator("#scenario-error")).to_be_empty()
 
+    page.locator('nav a[href="#accounts"]').click()
+    for name, kind in [("Salary account", "Current"), ("Meal card", "Meal card")]:
+        page.locator("#add-account").click()
+        account = page.locator("#account-form")
+        account.locator('[name="name"]').fill(name)
+        account.locator('[name="bank"]').fill("Test bank")
+        account.locator('[name="kind"]').select_option(kind)
+        account.locator('[name="opening"]').fill("0")
+        account.get_by_role("button", name="Save account").click()
     page.locator('nav a[href="#tax"]').click()
     payroll = page.locator("#payroll-form")
     payroll.locator('[name="gross"]').fill("1300")
+    payroll.locator('[name="bankAccountId"]').select_option(label="Salary account")
+    payroll.locator('[name="mealAccountId"]').select_option(label="Meal card")
     payroll.locator('[name="youth"]').check()
     payroll.locator('[name="age"]').fill("24")
     payroll.locator('[name="eligible"]').check()
@@ -334,14 +362,25 @@ with sync_playwright() as p:
     # The plan keeps its own monthly gross, so pull the new salary through it.
     page.locator("#reset-forecast").click()
     expect(page.locator("#forecast-results tr").first).to_contain_text("157,00")
+    page.locator("#forecast-payday").fill("1")
     page.locator('#forecast-inputs [data-month="2026-10"] [data-field="gross"]').fill("1400")
     page.locator("#forecast-form").get_by_role("button", name="Save salary plan").click()
     assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).forecast.rows[1].gross") == 140000
     expect(page.locator("#forecast-error")).to_be_empty()
+    page.locator('nav a[href="#transactions"]').click()
+    expect(page.locator("#transaction-rows")).to_contain_text("Salary")
+    expect(page.locator("#transaction-rows")).to_contain_text("Scheduled")
+    page.locator('nav a[href="#planning"]').click()
+    page.locator("#next-payday").get_by_role("button", name="Record salary").click()
+    expect(page.locator("#next-payday")).to_contain_text("Recorded")
+    saved_salary = page.evaluate("JSON.parse(localStorage.getItem('conta-v1'))")
+    assert [(t["salaryPart"], t["accountId"]) for t in saved_salary["transactions"]] == [("bank", saved_salary["payroll"]["bankAccountId"]), ("meal", saved_salary["payroll"]["mealAccountId"])]
     salary = page.locator("#forecast-results tr").first.locator("td").first.inner_text()
     page.locator('nav a[href="#overview"]').click()
     expect(page.locator("#overview-expected")).to_contain_text("Salary to bank")
     expect(page.locator("#overview-expected")).to_contain_text(salary)
+    expect(page.locator("#recent-list")).to_contain_text("Salary")
+    expect(page.locator("#recent-list")).to_contain_text("Meal allowance")
     expect(page.locator("#overview-expected-note")).to_contain_text(re.compile(r"Expected salary on \d{2}/\d{2}/\d{4}"))
     page.locator('nav a[href="#planning"]').click()
     page.locator("#add-recurring").click()
@@ -353,7 +392,7 @@ with sync_playwright() as p:
     expect(page.locator("#recurring-dialog")).not_to_be_visible()
     expect(page.locator("#recurring-list")).to_contain_text("Rent")
     page.locator("#post-recurring").click()
-    assert len(page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).transactions")) == 1
+    assert len(page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).transactions")) == 3
     expect(page.locator("#post-recurring")).to_be_disabled()
     page.reload()
     expect(page.locator("#post-recurring")).to_be_disabled()
@@ -395,7 +434,7 @@ with sync_playwright() as p:
     page.locator("#clear-data").click()
     page.locator("#restore").set_input_files({"name": "planning.json", "mimeType": "application/json", "buffer": backup})
     saved = page.evaluate("JSON.parse(localStorage.getItem('conta-v1'))")
-    assert len(saved["loans"]) == 1 and len(saved["recurring"]) == 2 and len(saved["transactions"]) == 2
+    assert len(saved["loans"]) == 1 and len(saved["recurring"]) == 2 and len(saved["transactions"]) == 4
     assert saved["forecast"]["rows"][1]["gross"] == 140000
     assert not errors, errors
 
@@ -416,10 +455,13 @@ with sync_playwright() as p:
     page.locator('nav a[href="#portfolio"]').click()
     page.locator("#add-ppr").click()
     holding = page.locator("#holding-form")
-    expect(holding.locator('[name="name"]')).to_have_value("Seguro PPR+ Ações")
+    expect(holding.locator('[name="name"]')).to_be_empty()
     expect(holding.locator('[name="kind"]')).to_have_value("PPR / Insurance")
     expect(page.locator("#holding-units-label")).to_be_hidden()
     assert not holding.locator('[name="symbol"]').evaluate("e => e.required")
+    assert holding.locator('[name="broker"]').get_attribute("list") == "financial-providers"
+    holding.locator('[name="name"]').fill("Test PPR")
+    holding.locator('[name="broker"]').fill("Test provider")
     holding.locator('[name="price"]').fill("100")
     holding.locator('[name="cost"]').fill("100")
     holding.get_by_role("button", name="Save investment").click()
@@ -434,7 +476,7 @@ with sync_playwright() as p:
     expect(page.locator("#investment-projection")).to_contain_text("Projected end value")
     page.locator('nav a[href="#planning"]').click()
     expect(page.locator("#planning-cash")).to_contain_text("950,00")
-    expect(page.locator("#payment-list")).to_contain_text("Seguro PPR+ Ações")
+    expect(page.locator("#payment-list")).to_contain_text("Test PPR")
     page.locator('nav a[href="#loans"]').click()
     page.locator("#add-loan").click()
     loan = page.locator("#loan-form")
@@ -452,8 +494,18 @@ with sync_playwright() as p:
     recurring.locator('[name="accountId"]').select_option(label="Spending")
     recurring.get_by_role("button", name="Save monthly expense").click()
     expect(page.locator("#planning-cash")).to_contain_text("840,00")
+    page.locator('nav a[href="#overview"]').click()
+    expect(page.locator("#overview-expected-movements")).to_contain_text("Small loan")
+    expect(page.locator("#overview-expected-movements")).to_contain_text("Scheduled loan payment")
+    page.locator('nav a[href="#transactions"]').click()
+    expect(page.locator("#transaction-rows")).to_contain_text("Small loan")
+    expect(page.locator("#transaction-rows")).to_contain_text("Scheduled")
+    page.locator('nav a[href="#planning"]').click()
     page.locator('[data-payment-kind="loan"]').click()
     assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).transactions.filter(t=>t.loanId).length") == 1
+    page.locator('nav a[href="#overview"]').click()
+    expect(page.locator("#recent-list")).to_contain_text("Small loan")
+    page.locator('nav a[href="#planning"]').click()
     expect(page.locator("#planning-cash")).to_contain_text("990,00")
     expect(page.locator("#planning-cash")).to_contain_text("840,00")
     page.locator("#post-recurring").click()

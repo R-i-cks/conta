@@ -67,7 +67,9 @@ test('portfolio supports fractional units, zero prices, gains, losses and valida
   assert.equal(result.value,30000);assert.equal(result.gain,5000);assert.equal(result.returnPct,20);
   assert.equal(portfolio([{...h,price:0}]).gain,-25000);
   assert.equal(portfolio([{...h,cost:0}]).returnPct,null);
-  const s={...validateState(backup),holdings:[h]};assert.deepEqual(validateState(s).holdings,[{...h,valuation:'units'}]);
+  const s={...validateState(backup),holdings:[h]};assert.deepEqual(validateState(s).holdings,[{...h,valuation:'units',autoPrice:false}]);
+  assert.equal(validateState({...s,holdings:[{...h,autoPrice:true}]}).holdings[0].autoPrice,true);
+  assert.throws(()=>validateState({...s,holdings:[{...h,symbol:'',autoPrice:true}]}));
   for(const patch of [{units:-1},{price:NaN},{cost:1.1},{kind:'Unknown'},{units:1e9,price:1e9}])assert.throws(()=>validateState({...s,holdings:[{...h,...patch}]}));
 });
 test('monthly employee withholding uses correct tables and abatements, not a flat top rate',()=>{
@@ -132,7 +134,7 @@ test('CSV escapes quotes, line breaks and spreadsheet formula injection', () => 
 
 // Loans and plans are in cents; schedules must conserve every cent of principal.
 import {amortize,compareLoan,defaultScenario,monthlyPayment,suggestedPenalty,validateLoan} from './loans.mjs';
-import {defaultForecast,projectYear,dueDate,dueOccurrences,postDueExpenses} from './planning.mjs';
+import {defaultForecast,projectYear,dueDate,dueOccurrences,postDueExpenses,postSalary,scheduledTransactions} from './planning.mjs';
 const loan={id:'loan',name:'Home',kind:'mortgage',rateType:'variable',balance:10000000,months:240,tan:3,taeg:4.2,monthlyCosts:1000,firstMonth:'2026-09',tracked:true,interestTax:0};
 const scenario=defaultScenario();
 test('amortisation has known annuity payments, correct first interest and exact principal conservation',()=>{
@@ -219,6 +221,24 @@ import {loanDates} from './loans.mjs';
 import {cashPlan,pendingPayments,validateForecast} from './planning.mjs';
 import {validateInvestmentPlan,projectInvestment,recordContribution,undoContribution} from './investments.mjs';
 const cashWorkspace=()=>({...validateState({version:1,demo:false,transactions:[],tax:{taxable:null,joint:false}}),accounts:[{id:'cash',name:'Cash',bank:'Bank',kind:'Current',opening:200000}]});
+test('salary posts once to its bank and meal-card destinations without making card funds spendable',()=>{
+  const s=cashWorkspace();
+  s.accounts.push({id:'meal',name:'Meal card',bank:'Issuer',kind:'Meal card',opening:0});
+  s.payroll={...defaultPayroll(),bankAccountId:'cash',mealAccountId:'meal'};
+  s.forecast=defaultForecast(s.payroll);
+  const row=projectYear(s).rows[0];let id=0;
+  const posted=validateState(postSalary(s,'2026-09','2026-09-25',()=>`salary-${++id}`));
+  assert.deepEqual(posted.transactions.map(t=>[t.salaryPart,t.amount,t.accountId]),[['bank',row.bank,'cash'],['meal',row.mealCard,'meal']]);
+  assert.deepEqual(posted.forecast.posted,['2026-09']);
+  assert.equal(accountBalances(posted).get('cash'),200000+row.bank);
+  assert.equal(accountBalances(posted).get('meal'),row.mealCard);
+  assert.equal(cashPlan(posted,'2026-09','2026-09-25').cash,200000+row.bank);
+  assert.equal(postSalary(posted,'2026-09','2026-09-25',()=> 'duplicate'),posted);
+  assert.throws(()=>postSalary({...s,payroll:{...s.payroll,mealAccountId:null}},'2026-09','2026-09-25',()=> 'missing'),/meal-card account/);
+  assert.throws(()=>postSalary(s,'2026-10','2026-09-25',()=> 'early'),/payday/);
+  assert.throws(()=>validateState({...s,payroll:{...s.payroll,bankAccountId:'meal'}}),/cash account/);
+  assert.throws(()=>validateState({...posted,transactions:posted.transactions.map(t=>t.salaryPart==='meal'?{...t,accountId:'cash'}:t)}),/wrong account type/);
+});
 test('date-based loans migrate without changing schedules and clamp payment days',()=>{
   const migrated=validateLoan(loan);
   assert.equal(migrated.months,240);assert.equal(migrated.start,'2026-09-01');assert.equal(migrated.end,'2046-08-31');
@@ -259,7 +279,7 @@ test('salary range and payday exclude out-of-range deposits and preserve legacy 
   assert.throws(()=>validateForecast({...s.forecast,payDay:32}));
   assert.throws(()=>validateForecast({...s.forecast,end:'2026-08-01'}));
 });
-const ppr={id:'ppr',name:'Seguro PPR+ Ações',symbol:'',kind:'PPR / Insurance',broker:'Santander Totta Seguros',valuation:'balance',units:1,price:1000,cost:100000,updated:'2026-09-01'};
+const ppr={id:'ppr',name:'Growth PPR',symbol:'',kind:'PPR / Insurance',broker:'Test insurer',valuation:'balance',units:1,price:1000,cost:100000,updated:'2026-09-01'};
 const investmentPlan={id:'plan',holdingId:'ppr',accountId:'cash',amount:10000,start:'2026-09-01',end:'2027-08-31',day:20,initialValue:100000,annualRate:0,enabled:true,posted:[]};
 test('investment projection conserves contributions at zero growth, supports losses and partial dates',()=>{
   const r=projectInvestment(investmentPlan);assert.equal(r.value,220000);assert.equal(r.contributed,120000);assert.equal(r.growth,0);
@@ -415,9 +435,23 @@ test('the expected month is salary in, commitments out, and nothing discretionar
   assert.equal(e.bank,row.bank);assert.equal(e.mealCard,row.mealCard);
   assert.equal(e.committed,row.recurring+row.loans+row.investments);
   assert.equal(e.left,row.bank-e.committed);
+  assert.deepEqual(e.movements.map(m=>[m.kind,m.type]),[['salary','income'],['salary','income']]);
   assert.ok(row.other>0,'the month has discretionary spending');
   assert.notEqual(e.left,row.remaining,'which the commitment figure leaves out');
-  assert.deepEqual(expectedMonth(s,'2030-04'),{inPlan:false},'months outside the plan have no row');
+  assert.deepEqual(expectedMonth(s,'2030-04'),{inPlan:false,movements:[]},'months outside the plan have no row');
+});
+test('the overview exposes scheduled salary and loan movements until they are recorded',()=>{
+  const s=cashWorkspace();
+  s.payroll={...defaultPayroll(),month:'2026-10'};s.forecast=defaultForecast(s.payroll);
+  s.loans=[validateLoan({...loan,accountId:'cash'})];
+  const september=expectedMonth(s,'2026-09');
+  assert.equal(september.inPlan,false);assert.equal(september.nextPayDate,'2026-10-25');
+  assert.deepEqual(september.movements.map(m=>[m.kind,m.date]),[['loan','2026-09-01']]);
+  assert.deepEqual(expectedMonth(s,'2026-10').movements.map(m=>m.kind),['loan','salary','salary']);
+  assert.ok(scheduledTransactions(s).some(t=>t.kind==='salary'&&t.scheduled));
+  assert.ok(scheduledTransactions(s).some(t=>t.kind==='loan'&&t.scheduled));
+  s.loans[0].posted=['2026-09'];
+  assert.deepEqual(expectedMonth(s,'2026-09').movements,[]);
 });
 test('loan terms read as years and months',()=>{
   assert.equal(termLabel(0),'0 months');
