@@ -5,6 +5,7 @@
 // adicional a abater por dependente, 21.43 vs 34.29; table III uses 42.86.
 export const IAS = 53713; // cents; Portaria 480-A/2025/1
 export const YOUTH_CAP = 55 * IAS;
+export const SPECIFIC_DEDUCTION = Math.round(8.54 * IAS); // CIRS 25(1)(a), Lei 45-A/2024.
 export const MEAL_LIMITS={cash:615,card:1046}; // CIRS 2(3)(b)(2), Portaria 51-B/2026/1.
 export const PAYROLL_SOURCE = 'https://diariodarepublica.pt/dr/detalhe/despacho/233-a-2026-998488151';
 export const PAYROLL_TABLE = [
@@ -32,6 +33,17 @@ export function validatePayroll(p) {
     !Number.isInteger(p.age) || p.age<0 || p.age>100 || !Number.isInteger(p.careerYear) || p.careerYear<1 || p.careerYear>10 ||
     ['youth','eligible','employerApplied'].some(k=>typeof p[k]!=='boolean')) throw new Error('Invalid monthly salary settings.');
   return Object.fromEntries(Object.keys(defaultPayroll()).map(key=>[key,p[key]]));
+}
+// A starting point for the annual calculator, from the salary settings alone.
+// Not a rendimento coletavel: other income, further deductions and the minimo
+// de existencia are the user's to add, and exempt IRS Jovem income still counts
+// when the rate is determined.
+export function annualTaxableEstimate(input) {
+  const p=validatePayroll(input),r=calculatePayroll(p);
+  const gross=r.annualGross+Math.max(0,p.mealDaily-MEAL_LIMITS[p.mealMethod])*p.annualMealDays;
+  const deduction=Math.max(SPECIFIC_DEDUCTION,r.annualSS); // CIRS 25(2).
+  const exemption=p.youth?Math.min(Math.round(gross*youthRate(p.careerYear)),YOUTH_CAP):0;
+  return {gross,deduction,exemption,taxable:Math.max(0,gross-deduction-exemption)};
 }
 export function youthRate(year) { return year===1 ? 1 : year<=4 ? .75 : year<=7 ? .5 : .25; }
 function withholding(grossCents,p) {

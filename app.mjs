@@ -2,7 +2,7 @@ import {validateInvestmentPlan,projectInvestment,recordContribution,undoContribu
 import {LOAN_KINDS, amortize, compareLoan, loanDates, dueDate} from './loans.mjs';
 import {defaultForecast, validateForecast, projectYear, pendingPayments, cashPlan, postDueExpenses} from './planning.mjs';
 import {BRACKETS, CATEGORIES, ASSET_TYPES, cents, calculateTax, totals, monthlyOutflows, validateState, toCSV, csvCell, accountBalances, portfolio} from './core.mjs';
-import {calculatePayroll, YOUTH_CAP} from './payroll.mjs';
+import {calculatePayroll, annualTaxableEstimate, YOUTH_CAP} from './payroll.mjs';
 const $ = selector => document.querySelector(selector);
 const money = value => new Intl.NumberFormat('pt-PT', {style:'currency',currency:'EUR'}).format(value / 100);
 const percent = value => new Intl.NumberFormat('en-GB', {maximumFractionDigits:2}).format(value) + '%';
@@ -126,6 +126,15 @@ $('#transaction-rows').addEventListener('click',event=>{
   const remove=event.target.closest('[data-delete]');if(!remove) return;
   const t=state.transactions.find(t=>t.id===remove.dataset.delete);
   if(t&&confirm(`Delete “${t.description}” (${money(t.amount)})?`)&&save({...state,transactions:state.transactions.filter(item=>item.id!==t.id)})) {render();toast('Transaction deleted.');}
+});
+$('#fill-from-salary').addEventListener('click',()=>{
+  try{
+    const e=annualTaxableEstimate(state.payroll);
+    $('#taxable-income').value=(e.taxable/100).toFixed(2);
+    $('#taxable-source').hidden=false;
+    $('#taxable-source').textContent=`${money(e.gross)} category A income − ${money(e.deduction)} specific deduction (CIRS 25)${e.exemption?` − ${money(e.exemption)} IRS Jovem exemption`:''} = ${money(e.taxable)}. A starting point from your salary settings only: add other income, further deductions and any mínimo de existência yourself. Exempt IRS Jovem income still counts when your rate is determined, which this figure does not model.`;
+    $('#tax-form').requestSubmit();
+  }catch(error){toast(error.message,true);}
 });
 $('#tax-form').addEventListener('submit',event=>{event.preventDefault();try {if(save({...state,tax:{taxable:cents($('#taxable-income').value),joint:$('#taxation').value==='joint'}})) {renderTax();toast('Your estimate is updated.');}}catch(error){toast(error.message);}});
 function download(filename,content,type) {const url=URL.createObjectURL(new Blob([content],{type}));const a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
@@ -323,7 +332,8 @@ function renderPaymentPlan(){
   renderCashSummary('#planning-cash',month);
   const salary=projectYear(state).rows.find(r=>r.month===month);
   $('#next-payday').textContent=salary&&salary.bank?`Expected salary: ${money(salary.bank)} on ${dateLabel(salary.payDate)}. Record the deposit in Transactions when received; it is not added to available cash automatically.`:'No salary payday in this month’s saved plan.';
-  $('#payment-list').innerHTML=plan.pending.map(p=>`<div class="commitment-row payment-row"><div><strong>${escape(p.description)}</strong><small>${p.kind==='loan'?'Loan instalment':p.kind==='investment'?'Investment contribution':'Monthly expense'} · ${dateLabel(p.date)} · ${escape(accountName(p.accountId))}${p.date<today()?' · Overdue':''}</small></div><strong>${money(p.amount)}</strong><div><button class="button secondary" data-payment-kind="${p.kind}" data-payment-source="${escape(p.sourceId)}" data-payment-month="${p.month}" ${p.date>today()?'disabled':''}>${p.kind==='investment'?'Record contribution':'Record paid'}</button></div></div>`).join('')||'<p class="empty">No unpaid commitments through this month.</p>';
+  const shown=plan.pending.slice(0,12),hidden=plan.pending.length-shown.length;
+  $('#payment-list').innerHTML=plan.pending.length?shown.map(p=>`<div class="commitment-row payment-row"><div><strong>${escape(p.description)}</strong><small>${p.kind==='loan'?'Loan instalment':p.kind==='investment'?'Investment contribution':'Monthly expense'} · ${dateLabel(p.date)} · ${escape(accountName(p.accountId))}${p.date<today()?' · Overdue':''}</small></div><strong>${money(p.amount)}</strong><div><button class="button secondary" data-payment-kind="${p.kind}" data-payment-source="${escape(p.sourceId)}" data-payment-month="${p.month}" ${p.date>today()?'disabled':''}>${p.kind==='investment'?'Record contribution':'Record paid'}</button></div></div>`).join('')+(hidden?`<p class="scope-note">${hidden} older due payment${hidden===1?'':'s'} not listed. Record these, or use Record due payments to post every due bill and instalment at once.</p>`:''):'<p class="empty">No unpaid commitments through this month.</p>';
 }
 $('#budget-month').value=today().slice(0,7);
 $('#budget-month').addEventListener('change',()=>{if($('#budget-month').value&&$('#budget-month').checkValidity())renderPaymentPlan();});
@@ -485,7 +495,7 @@ function renderInvestments(){
       const contributed=state.contributions.filter(c=>c.holdingId===h.id&&c.date>=p.start&&c.date<=h.updated).reduce((sum,c)=>sum+c.amount,0);
       const points=projection.rows.filter((r,i)=>i%12===0||i===projection.rows.length-1),max=Math.max(1,...points.map(r=>r.value));
       const poly=points.map((r,i)=>`${40+i/Math.max(1,points.length-1)*620},${180-r.value/max*160}`).join(' ');
-      return `<section class="spaced"><h3>${escape(h.name)}</h3><div class="plan-summary spaced">${[['Projected end value',projection.value],['Planned contributions',projection.contributed],['Projected growth',projection.growth]].map(([label,value])=>`<div><span>${label}</span><strong>${money(value)}</strong></div>`).join('')}</div><svg class="loan-svg" viewBox="0 0 700 220" role="img" aria-label="Projected investment value from ${escape(p.start)} to ${escape(p.end)}: ${money(projection.value)}"><polyline points="${poly}" fill="none" stroke="#345f43" stroke-width="3"/><text x="40" y="205">${escape(p.start)}</text><text x="555" y="205">${escape(p.end)}</text></svg><p class="scope-note">Initial value: ${money(p.initialValue)}. Actual value at ${dateLabel(h.updated)}: <strong>${money(actual)}</strong>. ${h.updated>=p.start&&h.updated<=p.end?`Planned value at that date: ${money(comparison.value)} · Difference: ${money(actual-comparison.value)}. Recorded contributions since plan start: ${money(contributed)} versus planned ${money(comparison.contributed)}.`:'Update the holding’s value within the plan dates to compare progress.'} Current gain/loss versus cost basis: ${money(actual-h.cost)}. <button class="text-button" data-investment-holding="${escape(h.id)}">Update actual value</button></p></section>`;
+      return `<section class="spaced"><h3>${escape(h.name)}</h3><div class="plan-summary spaced">${[['Projected end value',projection.value],['Planned contributions',projection.contributed],['Projected growth',projection.growth]].map(([label,value])=>`<div><span>${label}</span><strong>${money(value)}</strong></div>`).join('')}</div><svg class="loan-svg" viewBox="0 0 700 220" role="img" aria-label="Projected investment value from ${escape(p.start)} to ${escape(p.end)}: ${money(projection.value)}"><polyline points="${poly}" fill="none" stroke="#345f43" stroke-width="3"/><text x="40" y="205">${escape(p.start)}</text><text x="555" y="205">${escape(p.end)}</text></svg><p class="scope-note">Initial value: ${money(p.initialValue)}. Actual value at ${dateLabel(h.updated)}: <strong>${money(actual)}</strong>. ${h.updated>=p.start&&h.updated<=p.end?`Planned value at that date: ${money(comparison.value)} · Difference: ${money(actual-comparison.value)}. Recorded contributions through that date: ${money(contributed)} versus planned ${money(comparison.contributed)}.`:'Update the holding’s value within the plan dates to compare progress.'} Current gain/loss versus cost basis: ${money(actual-h.cost)}. <button class="text-button" data-investment-holding="${escape(h.id)}">Update actual value</button></p></section>`;
     }catch(error){return `<p class="error">${escape(error.message)}</p>`;}
   }).join('');
   $('#contribution-rows').innerHTML=sorted(state.contributions).map(c=>`<tr><td>${dateLabel(c.date)}</td><td>${escape(state.holdings.find(h=>h.id===c.holdingId)?.name||'Investment')}</td><td>${escape(accountName(c.accountId))}</td><td>${money(c.amount)}</td><td>${c.units||'Statement value'}</td><td><button class="icon-button" data-contribution-undo="${escape(c.id)}">Undo</button></td></tr>`).join('');

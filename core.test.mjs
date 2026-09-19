@@ -372,3 +372,23 @@ test('variable loans quote index plus spread; fixed phases drop both',()=>{
   for(const bad of [{spread:11},{spread:-1},{indexRate:60},{indexRate:-6,spread:0}])
     assert.throws(()=>validateLoan({...loan,indexRate:1,spread:1,...bad}));
 });
+
+// The annual calculator can start from the salary settings instead of a number
+// typed from nowhere. CIRS 25 verified 19 September 2026.
+import {annualTaxableEstimate, SPECIFIC_DEDUCTION, IAS} from './payroll.mjs';
+test('annual taxable estimate applies CIRS 25 and the IRS Jovem annual cap',()=>{
+  const base={...defaultPayroll(),gross:150000};
+  assert.equal(SPECIFIC_DEDUCTION,Math.round(8.54*IAS),'CIRS 25(1)(a): 8,54 × IAS');
+  const plain=annualTaxableEstimate(base);
+  assert.equal(plain.gross,2100000);assert.equal(plain.deduction,SPECIFIC_DEDUCTION);
+  assert.equal(plain.exemption,0);assert.equal(plain.taxable,2100000-SPECIFIC_DEDUCTION);
+  // CIRS 25(2): contributions replace the fixed deduction once they exceed it.
+  assert.equal(annualTaxableEstimate({...base,gross:500000}).deduction,Math.round(500000*14*.11));
+  // Only the excess over the daily meal limit is category A income.
+  assert.equal(annualTaxableEstimate({...base,mealDaily:1200}).gross,2100000+(1200-1046)*242);
+  const youth={...base,youth:true,age:28,eligible:true};
+  assert.equal(annualTaxableEstimate({...youth,careerYear:1}).taxable,0,'first year exempts the lot');
+  assert.equal(annualTaxableEstimate({...youth,careerYear:5}).exemption,1050000,'years 5-7 exempt half');
+  assert.equal(annualTaxableEstimate({...youth,careerYear:1,gross:400000}).exemption,YOUTH_CAP,'the cap binds');
+  assert.throws(()=>annualTaxableEstimate({...base,youth:true,eligible:false}),/eligibility/);
+});
