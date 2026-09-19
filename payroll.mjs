@@ -23,15 +23,20 @@ export const SINGLE_EARNER_TABLE = [
 // Placeholder starting values, not anyone's pay. Saved settings override them.
 export const defaultPayroll = () => ({gross:100000,month:'2026-09',family:'single',dependants:0,payments:14,
   mealDaily:960,mealDays:22,mealMethod:'card',annualMealDays:242,
-  youth:false,age:30,careerYear:1,eligible:false,employerApplied:false});
-export function validatePayroll(p) {
+  youth:false,age:30,careerYear:1,eligible:false,employerApplied:false,
+  bankAccountId:null,mealAccountId:null});
+export function validatePayroll(input) {
+  let p=input;
   if (!p || !Number.isSafeInteger(p.gross) || p.gross<0 || p.gross>100_000_000_000 ||
     !/^\d{4}-(0[1-9]|1[0-2])$/.test(p.month) || p.month<'2026-01' || p.month>'2100-12' || !['single','married-two','married-one'].includes(p.family) ||
     !Number.isInteger(p.dependants) || p.dependants<0 || p.dependants>20 || ![12,14].includes(p.payments) ||
     !Number.isSafeInteger(p.mealDaily) || p.mealDaily<0 || p.mealDaily>100000 || !['cash','card'].includes(p.mealMethod) ||
     !Number.isInteger(p.mealDays) || p.mealDays<0 || p.mealDays>31 || !Number.isInteger(p.annualMealDays) || p.annualMealDays<0 || p.annualMealDays>366 ||
     !Number.isInteger(p.age) || p.age<0 || p.age>100 || !Number.isInteger(p.careerYear) || p.careerYear<1 || p.careerYear>10 ||
-    ['youth','eligible','employerApplied'].some(k=>typeof p[k]!=='boolean')) throw new Error('Invalid monthly salary settings.');
+    ['youth','eligible','employerApplied'].some(k=>typeof p[k]!=='boolean') ||
+    ['bankAccountId','mealAccountId'].some(k=>!(p[k]===undefined||p[k]===null||typeof p[k]==='string'&&p[k].length>0&&p[k].length<=100))) throw new Error('Invalid monthly salary settings.');
+  // Older backups predate salary destinations; they simply have none set.
+  p={...p,bankAccountId:p.bankAccountId??null,mealAccountId:p.mealAccountId??null};
   return Object.fromEntries(Object.keys(defaultPayroll()).map(key=>[key,p[key]]));
 }
 // A starting point for the annual calculator, from the salary settings alone.

@@ -1,5 +1,5 @@
 import {calculatePayroll} from './payroll.mjs';
-import {addMonth,amortize,validateLoan,validDate,dueDate} from './loans.mjs';
+import {addMonth,amortize,validateLoan,validDate,validMonth,dueDate} from './loans.mjs';
 import {accountBalances} from './core.mjs';
 export {dueDate};
 export function dueOccurrences(rule,through) {
@@ -55,14 +55,15 @@ export function expectedMonth(state,month) {
 export function defaultForecast(payroll) {
   const rows=[],december=`${payroll.month.slice(0,4)}-12`;
   for(let month=payroll.month;month<=december;month=addMonth(month,1))rows.push({month,gross:payroll.gross,mealDays:Math.min(payroll.mealDays,daysInMonth(month)),holiday:0,christmas:month===december?payroll.gross:0});
-  return {start:`${payroll.month}-01`,end:`${december}-31`,payDay:25,rows};
+  return {start:`${payroll.month}-01`,end:`${december}-31`,payDay:25,posted:[],rows};
 }
 export function validateForecast(input) {
   if(!input)throw new Error('Invalid salary plan.');
-  const f={...input,start:typeof input.start==='string'&&input.start.length===7?`${input.start}-01`:input.start,end:input.end===undefined?'2026-12-31':input.end,payDay:input.payDay===undefined?25:input.payDay};
+  const f={...input,start:typeof input.start==='string'&&input.start.length===7?`${input.start}-01`:input.start,end:input.end===undefined?'2026-12-31':input.end,payDay:input.payDay===undefined?25:input.payDay,posted:input.posted===undefined?[]:input.posted};
   if(!validDate(f.start)||!validDate(f.end)||f.start.slice(0,4)!==f.end.slice(0,4)||f.start<'2026-01-01'||f.end<f.start||!Number.isInteger(f.payDay)||f.payDay<1||f.payDay>31||!Array.isArray(f.rows)||f.rows.length!==Number(f.end.slice(5,7))-Number(f.start.slice(5,7))+1)throw new Error('Choose start/end dates inside one calendar year, 2026 or later, and a payday from 1 to 31.');
   for(const [i,row]of f.rows.entries())if(!row||row.month!==addMonth(f.start.slice(0,7),i)||!['gross','holiday','christmas'].every(k=>Number.isSafeInteger(row[k])&&row[k]>=0&&row[k]<=100_000_000_000)||!Number.isInteger(row.mealDays)||row.mealDays<0||row.mealDays>daysInMonth(row.month))throw new Error('Check the month, salary, meal days and allowances in your plan.');
-  return {start:f.start,end:f.end,payDay:f.payDay,rows:f.rows.map(({month,gross,mealDays,holiday,christmas})=>({month,gross,mealDays,holiday,christmas}))};
+  if(!Array.isArray(f.posted)||f.posted.length>1200||!f.posted.every(validMonth)||new Set(f.posted).size!==f.posted.length)throw new Error('Invalid salary posting history.');
+  return {start:f.start,end:f.end,payDay:f.payDay,posted:[...f.posted],rows:f.rows.map(({month,gross,mealDays,holiday,christmas})=>({month,gross,mealDays,holiday,christmas}))};
 }
 export function projectYear(state,forecast=state.forecast) {
   forecast=validateForecast(forecast);

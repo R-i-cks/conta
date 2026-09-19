@@ -45,7 +45,7 @@ export function validateState(data) {
   for(const list of [accounts,transfers,holdings,snapshots]) if(!Array.isArray(list)||list.length>50000) throw new Error('Invalid workspace records.');
   const accountIds=new Set();
   for(const a of accounts) {
-    if(!a||!validText(a.id,100)||accountIds.has(a.id)||!validText(a.name,80)||!validText(a.bank,80)||!['Current','Savings','Brokerage cash','Cash'].includes(a.kind)||!validMoney(a.opening,true)) throw new Error('Invalid bank account.');
+    if(!a||!validText(a.id,100)||accountIds.has(a.id)||!validText(a.name,80)||!validText(a.bank,80)||!ACCOUNT_KINDS.includes(a.kind)||!validMoney(a.opening,true)) throw new Error('Invalid bank account.');
     accountIds.add(a.id);
   }
   const ids = new Set();
@@ -71,6 +71,8 @@ export function validateState(data) {
     snapshotDates.add(s.date);
   }
   const payroll=legacy?defaultPayroll():validatePayroll(data.payroll);
+  for(const key of ['bankAccountId','mealAccountId'])
+    if(payroll[key]!==null&&!accountIds.has(payroll[key]))throw new Error('Salary settings refer to a missing account.');
   const recurring=data.version<3?[]:data.recurring,rawLoans=data.version<3?[]:data.loans;
   const loans=Array.isArray(rawLoans)?rawLoans.map(validateLoan):rawLoans;
   if(!Array.isArray(recurring)||!Array.isArray(loans)||recurring.length>1000||loans.length>1000)throw new Error('Invalid planning records.');
@@ -80,14 +82,21 @@ export function validateState(data) {
     ruleIds.add(r.id);
   }
   for(const l of loans){if(l.accountId!==null&&!accountIds.has(l.accountId))throw new Error('Loan refers to a missing account.');if(loanIds.has(l.id))throw new Error('Duplicate loan.');loanIds.add(l.id);}
-  for(const t of data.transactions)if(data.version>=3&&(t.recurringId!==undefined||t.loanId!==undefined||t.occurrence!==undefined)){
-    const kind=t.loanId!==undefined?'loan':'recurring',id=kind==='loan'?t.loanId:t.recurringId;
+  for(const t of data.transactions)if(data.version>=3&&(t.recurringId!==undefined||t.loanId!==undefined||t.salaryPart!==undefined||t.occurrence!==undefined)){
+    const kind=t.loanId!==undefined?'loan':t.salaryPart!==undefined?'salary':'recurring';
+    const id=kind==='loan'?t.loanId:kind==='salary'?t.salaryPart:t.recurringId;
     const key=JSON.stringify([kind,id,t.occurrence]);
-    if(!validText(id,100)||!validMonth(t.occurrence)||t.type!=='expense'||occurrences.has(key)||(t.loanId!==undefined&&t.recurringId!==undefined))throw new Error('Invalid or duplicate payment occurrence.');
-    const source=(kind==='loan'?loans:recurring).find(r=>r.id===id);
-    if(source&&!source.posted.includes(t.occurrence))throw new Error('Payment is missing from its posting history.');
+    const tags=[t.loanId,t.recurringId,t.salaryPart].filter(v=>v!==undefined).length;
+    if(!validText(id,100)||!validMonth(t.occurrence)||t.type!==(kind==='salary'?'income':'expense')||occurrences.has(key)||tags>1)throw new Error('Invalid or duplicate payment occurrence.');
+    if(kind==='salary'){
+      if(!['bank','meal'].includes(t.salaryPart)||!forecast.posted.includes(t.occurrence))throw new Error('Salary is missing from its posting history.');
+    } else {
+      const source=(kind==='loan'?loans:recurring).find(r=>r.id===id);
+      if(source&&!source.posted.includes(t.occurrence))throw new Error('Payment is missing from its posting history.');
+    }
     occurrences.add(key);
   }
+  const forecast=data.version<3?defaultForecast(payroll):validateForecast(data.forecast);
   const investmentPlans=data.version<4?[]:data.investmentPlans,contributions=data.version<4?[]:data.contributions;
   if(!Array.isArray(investmentPlans)||investmentPlans.length>1000||!Array.isArray(contributions)||contributions.length>50000)throw new Error('Invalid investment records.');
   const planIds=new Set(),plannedHoldings=new Set(),contributionIds=new Set(),contributionOccurrences=new Set();
@@ -108,13 +117,23 @@ export function validateState(data) {
   return {version:4,demo:data.demo,
     investmentPlans:investmentPlans.map(validateInvestmentPlan),contributions:contributions.map(({id,holdingId,accountId,date,amount,units,planId,occurrence})=>({id,holdingId,accountId,date,amount,units,...(planId?{planId,occurrence}:{})})),
     recurring:recurring.map(({id,description,category,amount,accountId,start,end,day,enabled,posted})=>({id,description,category,amount,accountId,start,end,day,enabled,posted:[...posted]})),
-    loans:loans.map(validateLoan),forecast:data.version<3?defaultForecast(payroll):validateForecast(data.forecast),
-    transactions:data.transactions.map(({id,description,type,category,amount,date,accountId,recurringId,loanId,occurrence})=>({id,description,type,category,amount,date,accountId:legacy?null:accountId,...(data.version>=3&&recurringId?{recurringId,occurrence}:{}),...(data.version>=3&&loanId?{loanId,occurrence}:{})})),
+    loans:loans.map(validateLoan),forecast,
+    transactions:data.transactions.map(({id,description,type,category,amount,date,accountId,recurringId,loanId,salaryPart,occurrence})=>({id,description,type,category,amount,date,accountId:legacy?null:accountId,...(data.version>=3&&recurringId?{recurringId,occurrence}:{}),...(data.version>=3&&loanId?{loanId,occurrence}:{}),...(data.version>=3&&salaryPart?{salaryPart,occurrence}:{})})),
     accounts:accounts.map(({id,name,bank,kind,opening})=>({id,name,bank,kind,opening})),
     transfers:transfers.map(({id,from,to,amount,date})=>({id,from,to,amount,date})),
     holdings:holdings.map(({id,name,symbol,broker,kind,units,cost,price,updated,valuation})=>({id,name,symbol,broker,kind,units,cost,price,updated,valuation:valuation||'units'})),
     snapshots:snapshots.map(({date,cash,investments,cost})=>({date,cash,investments,cost})),
     payroll,tax:{taxable:data.tax.taxable,joint:data.tax.joint}};
+}
+export const CARD_KIND='Meal card';
+export const ACCOUNT_KINDS=['Current','Savings','Brokerage cash','Cash',CARD_KIND];
+// A meal card holds real money that cannot pay a bill, so it is split out
+// everywhere a spendable total is needed.
+export function accountTotals(state,through) {
+  const balances=accountBalances(state,through);
+  let cash=0,card=0;
+  for(const a of state.accounts) (a.kind===CARD_KIND?card+=balances.get(a.id):cash+=balances.get(a.id));
+  return {balances,cash,card,total:cash+card};
 }
 export const ASSET_TYPES=['ETF','Stock','Bond','Fund','PPR / Insurance','Deposit','Managed portfolio','Crypto','Other'];
 function validText(value,max) {return typeof value==='string'&&value.trim().length>0&&value.length<=max;}
