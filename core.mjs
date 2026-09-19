@@ -132,6 +132,20 @@ export function portfolio(holdings) {
   const value=positions.reduce((sum,h)=>sum+h.value,0),cost=positions.reduce((sum,h)=>sum+h.cost,0);
   return {positions,value,cost,gain:value-cost,returnPct:cost?(value-cost)/cost*100:null};
 }
+export function monthlyOutflows(state,month) {
+  const entries=state.transactions.filter(t=>t.type==='expense'&&t.date.startsWith(month));
+  const sum=list=>list.reduce((total,item)=>total+item.amount,0);
+  const loans=sum(entries.filter(t=>t.loanId)),bills=sum(entries.filter(t=>!t.loanId&&t.recurringId));
+  const invested=sum((state.contributions||[]).filter(c=>c.date.startsWith(month)));
+  const categories=new Map();
+  for(const t of entries) if(!t.loanId&&!t.recurringId) categories.set(t.category,(categories.get(t.category)||0)+t.amount);
+  let rest=[...categories].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]));
+  if(rest.length>4) rest=[...rest.slice(0,3),['Other categories',rest.slice(3).reduce((total,[,amount])=>total+amount,0)]];
+  const groups=[['Loan instalments',loans],['Monthly bills',bills],['Investments',invested],...rest]
+    .filter(([,amount])=>amount>0).map(([label,amount])=>({label,amount}));
+  const total=groups.reduce((sum,g)=>sum+g.amount,0);
+  return {groups:groups.map(g=>({...g,share:total?g.amount/total*100:0})),total,spent:sum(entries),invested};
+}
 export function totals(transactions) {
   return transactions.reduce((a, t) => { a[t.type] += t.amount; a.balance += t.type === 'income' ? t.amount : -t.amount; return a; }, {income: 0, expense: 0, balance: 0});
 }

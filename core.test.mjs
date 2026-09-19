@@ -329,3 +329,46 @@ test('every CSV export shares one escaper',()=>{
   assert.equal(csvCell('@x'),'"\'@x"');
   assert.equal(csvCell('a"b'),'"a""b"');
 });
+
+// The overview ring answers "where did the money go", so commitments must not
+// hide inside Housing/Transport and contributions must not vanish entirely.
+import {monthlyOutflows} from './core.mjs';
+const outflowState=()=>({...cashWorkspace(),
+  transactions:[
+    {id:'t1',description:'Rent',category:'Housing',type:'expense',amount:50000,date:'2026-09-01',accountId:'cash',recurringId:'rent',occurrence:'2026-09'},
+    {id:'t2',description:'Home loan',category:'Housing',type:'expense',amount:40000,date:'2026-09-05',accountId:'cash',loanId:'loan',occurrence:'2026-09'},
+    {id:'t3',description:'Groceries',category:'Groceries',type:'expense',amount:12000,date:'2026-09-06',accountId:'cash'},
+    {id:'t4',description:'Dinner',category:'Dining',type:'expense',amount:3000,date:'2026-09-07',accountId:'cash'},
+    {id:'t5',description:'Salary',category:'Salary',type:'income',amount:200000,date:'2026-09-25',accountId:'cash'},
+    {id:'t6',description:'August groceries',category:'Groceries',type:'expense',amount:9900,date:'2026-08-06',accountId:'cash'}],
+  contributions:[{id:'c1',holdingId:'ppr',accountId:'cash',date:'2026-09-20',amount:10000,units:0}]});
+test('monthly outflows split commitments from discretionary spending and count contributions',()=>{
+  const out=monthlyOutflows(outflowState(),'2026-09');
+  assert.deepEqual(out.groups.map(g=>g.label),['Loan instalments','Monthly bills','Investments','Groceries','Dining']);
+  assert.deepEqual(out.groups.map(g=>g.amount),[40000,50000,10000,12000,3000]);
+  assert.equal(out.total,115000,'income and other months are excluded');
+  assert.equal(out.spent,105000);assert.equal(out.invested,10000,'contributions are not expenses but still leave the account');
+  assert.equal(Math.round(out.groups.reduce((sum,g)=>sum+g.share,0)),100);
+  assert.equal(monthlyOutflows(outflowState(),'2026-10').total,0);
+});
+test('loose categories collapse to the top three plus a remainder',()=>{
+  const s=outflowState();
+  s.transactions=['Groceries','Dining','Transport','Leisure','Health'].map((category,i)=>
+    ({id:`x${i}`,description:category,category,type:'expense',amount:(5-i)*1000,date:'2026-09-10',accountId:'cash'}));
+  s.contributions=[];
+  const out=monthlyOutflows(s,'2026-09');
+  assert.deepEqual(out.groups.map(g=>g.label),['Groceries','Dining','Transport','Other categories']);
+  assert.equal(out.groups.at(-1).amount,3000,'Leisure and Health are pooled');
+  assert.equal(out.total,15000);
+});
+test('variable loans quote index plus spread; fixed phases drop both',()=>{
+  const v=validateLoan({...loan,indexRate:2.104,spread:0.9});
+  assert.equal(v.tan,3.004,'TAN is the sum, not a separately entered number');
+  assert.deepEqual(validateLoan(v),v,'round-trips through a backup unchanged');
+  assert.equal(validateLoan(loan).spread,null,'older backups have neither part');
+  const fixed=validateLoan({...loan,rateType:'fixed',indexRate:2,spread:1});
+  assert.equal(fixed.spread,null);assert.equal(fixed.indexRate,null);assert.equal(fixed.tan,loan.tan);
+  assert.equal(amortize(v).rows[0].interest,Math.round(v.balance*3.004/1200),'the schedule runs on the derived TAN');
+  for(const bad of [{spread:11},{spread:-1},{indexRate:60},{indexRate:-6,spread:0}])
+    assert.throws(()=>validateLoan({...loan,indexRate:1,spread:1,...bad}));
+});

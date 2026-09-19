@@ -38,6 +38,10 @@ with sync_playwright() as p:
     add('<img src=x onerror="alert(1)">', "100.01", "expense", "Groceries")
     assert page.locator("#recent-list img").count() == 0
     expect(page.locator("#balance")).to_contain_text("400,28")
+    expect(page.locator("#spending .ring-center strong")).to_contain_text("100,01")
+    expect(page.locator("#spending .spending-row")).to_have_count(1)
+    expect(page.locator("#spending .spending-row")).to_contain_text("Groceries")
+    expect(page.locator("#assets")).to_contain_text("0,00")
     page.reload()
     expect(page.locator("#recent-list .recent-item")).to_have_count(2)
     page.locator('nav a[href="#transactions"]').click()
@@ -212,6 +216,27 @@ with sync_playwright() as p:
     assert "Extra principal EUR" in Path(schedule_download.value.path()).read_text()
     page.locator('#loans summary').filter(has_text="Monthly repayment schedule").click()
     page.screenshot(path="/tmp/conta-loans.png", full_page=True)
+
+    page.locator("#add-loan").click()
+    home = page.locator("#loan-form")
+    expect(page.locator("#loan-index-fields")).to_be_visible()
+    for name, value in {"name": "My home", "balance": "120000", "indexRate": "2.104", "spread": "0.9",
+                        "start": "2026-10-01", "end": "2046-09-30", "paymentDay": "8"}.items():
+        home.locator(f'[name="{name}"]').fill(value)
+    expect(home.locator('[name="tan"]')).to_have_value("3.004")
+    assert home.locator('[name="tan"]').evaluate("el => el.readOnly") is True
+    home.locator('[name="rateType"]').select_option("fixed")
+    expect(page.locator("#loan-index-fields")).not_to_be_visible()
+    assert home.locator('[name="tan"]').evaluate("el => el.readOnly") is False
+    home.locator('[name="rateType"]').select_option("variable")
+    home.get_by_role("button", name="Save loan").click()
+    expect(page.locator("#loan-dialog")).not_to_be_visible()
+    expect(page.locator("#loan-cards")).to_contain_text("spread")
+    assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).loans.find(l => l.name === 'My home').tan") == 3.004
+    # Remove it again so the rest of the suite sees the single-loan workspace it expects.
+    page.locator("#loan-cards article").filter(has_text="My home").locator("[data-loan-delete]").click()
+    expect(page.locator("#loan-cards article")).to_have_count(1)
+    page.locator("#selected-loan").select_option(label="My car")
     scenario.locator('[name="lump"]').fill("10001")
     expect(page.locator("#scenario-error")).to_contain_text("exceeds")
     expect(page.locator("#export-loan")).to_be_disabled()
@@ -221,12 +246,16 @@ with sync_playwright() as p:
 
     page.locator('nav a[href="#tax"]').click()
     payroll = page.locator("#payroll-form")
+    payroll.locator('[name="gross"]').fill("1300")
     payroll.locator('[name="youth"]').check()
+    payroll.locator('[name="age"]').fill("24")
     payroll.locator('[name="eligible"]').check()
     payroll.locator('[name="employerApplied"]').check()
     payroll.get_by_role("button", name="Calculate take-home pay").click()
     page.locator('nav a[href="#planning"]').click()
     expect(page.locator("#forecast-results tr")).to_have_count(4)
+    # The plan keeps its own monthly gross, so pull the new salary through it.
+    page.locator("#reset-forecast").click()
     expect(page.locator("#forecast-results tr").first).to_contain_text("157,00")
     page.locator('#forecast-inputs [data-month="2026-10"] [data-field="gross"]').fill("1400")
     page.locator("#forecast-form").get_by_role("button", name="Save salary plan").click()

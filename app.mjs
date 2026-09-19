@@ -1,11 +1,12 @@
 import {validateInvestmentPlan,projectInvestment,recordContribution,undoContribution} from './investments.mjs';
 import {LOAN_KINDS, amortize, compareLoan, loanDates, dueDate} from './loans.mjs';
 import {defaultForecast, validateForecast, projectYear, pendingPayments, cashPlan, postDueExpenses} from './planning.mjs';
-import {BRACKETS, CATEGORIES, ASSET_TYPES, cents, calculateTax, totals, validateState, toCSV, csvCell, accountBalances, portfolio} from './core.mjs';
+import {BRACKETS, CATEGORIES, ASSET_TYPES, cents, calculateTax, totals, monthlyOutflows, validateState, toCSV, csvCell, accountBalances, portfolio} from './core.mjs';
 import {calculatePayroll, YOUTH_CAP} from './payroll.mjs';
 const $ = selector => document.querySelector(selector);
 const money = value => new Intl.NumberFormat('pt-PT', {style:'currency',currency:'EUR'}).format(value / 100);
 const percent = value => new Intl.NumberFormat('en-GB', {maximumFractionDigits:2}).format(value) + '%';
+const rate = value => new Intl.NumberFormat('en-GB', {maximumFractionDigits:3}).format(value) + '%';
 const escape = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const KEY = 'conta-v1';
@@ -67,12 +68,15 @@ function renderOverview() {
   const chart=$('#cash-chart');
   chart.setAttribute('aria-label',months.map(m=>`${m.key}: income ${money(m.income)}, expenses ${money(m.expense)}`).join('; '));
   chart.innerHTML=`<div class="y-labels">${[1,.75,.5,.25,0].map(v=>`<span>${Math.round(ceiling*v/100).toLocaleString('en-GB')}</span>`).join('')}</div><div class="chart-plot">${months.map((m,i)=>`<div class="chart-group ${i===5?'current':''}" title="${m.key}: income ${money(m.income)}; expenses ${money(m.expense)}"><div class="chart-bar" style="height:${m.income/ceiling*100}%"></div><div class="chart-bar out" style="height:${m.expense/ceiling*100}%"></div><span class="chart-label">${m.label}</span></div>`).join('')}</div>`;
-  const categories=new Map();for(const t of entries.filter(t=>t.type==='expense')) categories.set(t.category,(categories.get(t.category)||0)+t.amount);
-  let spending=[...categories].sort((a,b)=>b[1]-a[1]);
-  if(spending.length>4) spending=[...spending.slice(0,3),['Other categories',spending.slice(3).reduce((sum,t)=>sum+t[1],0)]];
-  const colors=['#345f43','#96ae72','#cfdaa7','#e3bb95'];let angle=0;
-  const gradient=spending.map(([,amount],i)=>{const start=angle;angle+=amount/total.expense*360;return `${colors[i]} ${start}deg ${angle}deg`;}).join(',');
-  $('#spending').innerHTML=total.expense?`<div class="spending-ring" style="background:conic-gradient(${gradient})"><div class="ring-center"><span>Total spent</span><strong>${money(total.expense)}</strong></div></div><div class="spending-legend">${spending.map(([name,amount],i)=>`<div class="spending-row"><i style="background:${colors[i]}"></i><span>${name}</span><strong>${money(amount)}</strong></div>`).join('')}</div>`:'<p class="empty">A fresh start.<br>Your spending will appear here.</p>';
+  const held=portfolio(state.holdings),cashNow=[...accountBalances(state,today()).values()].reduce((sum,value)=>sum+value,0);
+  $('#assets').textContent=money(cashNow+held.value);
+  $('#assets-foot').textContent=`${state.accounts.length} account${state.accounts.length===1?'':'s'} · ${state.holdings.length} holding${state.holdings.length===1?'':'s'} · today`;
+  const outflow=monthlyOutflows(state,month);
+  const colors=['#345f43','#4f7a53','#7d9b63','#96ae72','#cfdaa7','#e3bb95','#9baeb1'];
+  let angle=0;
+  const gradient=outflow.groups.map((g,i)=>{const start=angle;angle+=g.share*3.6;return `${colors[i]} ${start}deg ${i===outflow.groups.length-1?360:angle}deg`;}).join(',');
+  const ringLabel=`Money out ${money(outflow.total)}. `+outflow.groups.map(g=>`${g.label} ${money(g.amount)}, ${percent(g.share)}`).join('; ');
+  $('#spending').innerHTML=outflow.total?`<div class="spending-ring" role="img" aria-label="${escape(ringLabel)}" style="background:conic-gradient(${gradient})"><div class="ring-center"><span>Money out</span><strong>${money(outflow.total)}</strong></div></div><div class="spending-legend">${outflow.groups.map((g,i)=>`<div class="spending-row"><i style="background:${colors[i]}"></i><span>${escape(g.label)} · ${percent(Math.round(g.share*10)/10)}</span><strong>${money(g.amount)}</strong></div>`).join('')}</div>`:'<p class="empty">A fresh start.<br>Your spending will appear here.</p>';
   $('#recent-list').innerHTML=sorted(entries).slice(0,4).map(t=>`<div class="recent-item"><span class="category-icon" aria-hidden="true">${icons[t.category]}</span><div><h3>${escape(t.description)}</h3><p>${escape(t.category)} · ${dateLabel(t.date)}</p></div><strong class="amount ${t.type}">${t.type==='income'?'+':'−'}${money(t.amount)}</strong></div>`).join('')||'<p class="empty">Your month starts here.<br>Add your first transaction.</p>';
 }
 function renderTransactions() {
@@ -379,9 +383,10 @@ function renderLoans(){
   $('#selected-loan').innerHTML=state.loans.map(l=>`<option value="${escape(l.id)}">${escape(l.name)}</option>`).join('');
   if(state.loans.some(l=>l.id===selected))$('#selected-loan').value=selected;
   $('#loan-simulator').hidden=!state.loans.length;
-  $('#loan-cards').innerHTML=state.loans.map(l=>`<article class="panel account-card"><div class="panel-heading"><span class="pill">${LOAN_KINDS[l.kind]}</span><span class="muted">${l.tracked?'In monthly plan':'Simulation only'}</span></div><h2>${escape(l.name)}</h2><div class="stat-number">${money(l.balance)}</div><small class="muted">Principal at start of schedule · ${l.posted.length} payment(s) recorded</small><p class="muted">${dateLabel(l.start)} – ${dateLabel(l.end)} · ${l.months} payments on day ${l.paymentDay} · ${escape(accountName(l.accountId))}<br>TAN ${percent(l.tan)} · TAEG ${l.taeg===null?'not entered':percent(l.taeg)}</p><div class="button-row"><button class="button secondary" data-loan-explore="${escape(l.id)}">Explore</button><button class="icon-button" data-loan-edit="${escape(l.id)}">Edit</button><button class="icon-button" data-loan-delete="${escape(l.id)}">Delete</button></div></article>`).join('')||'<article class="panel"><p class="empty">Add your car, home or personal loan.<br>Start with the remaining balance and term from your lender.</p></article>';
+  $('#loan-cards').innerHTML=state.loans.map(l=>`<article class="panel account-card"><div class="panel-heading"><span class="pill">${LOAN_KINDS[l.kind]}</span><span class="muted">${l.tracked?'In monthly plan':'Simulation only'}</span></div><h2>${escape(l.name)}</h2><div class="stat-number">${money(l.balance)}</div><small class="muted">Principal at start of schedule · ${l.posted.length} payment(s) recorded</small><p class="muted">${dateLabel(l.start)} – ${dateLabel(l.end)} · ${l.months} payments on day ${l.paymentDay} · ${escape(accountName(l.accountId))}<br>TAN ${rate(l.tan)}${rateSource(l)} · TAEG ${l.taeg===null?'not entered':rate(l.taeg)}</p><div class="button-row"><button class="button secondary" data-loan-explore="${escape(l.id)}">Explore</button><button class="icon-button" data-loan-edit="${escape(l.id)}">Edit</button><button class="icon-button" data-loan-delete="${escape(l.id)}">Delete</button></div></article>`).join('')||'<article class="panel"><p class="empty">Add your car, home or personal loan.<br>Start with the remaining balance and term from your lender.</p></article>';
   updateLoanSimulation();
 }
+const rateSource=l=>l.indexRate!==null&&l.spread!==null?` (index ${rate(l.indexRate)} + spread ${rate(l.spread)})`:'';
 function scenarioValues(){
   const f=$('#scenario-form'),v=Object.fromEntries(new FormData(f));
   return {lump:v.mode==='recurring'?0:cents(v.lump||'0'),recurring:v.mode==='once'?0:cents(v.recurring||'0'),after:Number(v.after),interval:Number(v.interval||1),feeRate:v.feeRate===''?null:Number(v.feeRate),feeTax:Number(v.feeTax)};
@@ -395,7 +400,7 @@ function updateLoanSimulation(){
   const loan=state.loans.find(l=>l.id===$('#selected-loan').value);loanComparison=null;
   if(!loan)return;
   toggleScenario();$('#scenario-form').elements.after.max=loan.months-1;
-  $('#loan-terms').textContent=`${money(loan.balance)} principal · ${loan.months} months from ${monthLabel(loan.firstMonth)} · ${loan.rateType} TAN ${percent(loan.tan)} · TAEG ${loan.taeg===null?'not entered':percent(loan.taeg)} · ${money(loan.monthlyCosts)} monthly costs · interest duty ${percent(loan.interestTax)}.`;
+  $('#loan-terms').textContent=`${money(loan.balance)} principal · ${loan.months} months from ${monthLabel(loan.firstMonth)} · ${loan.rateType} TAN ${rate(loan.tan)}${rateSource(loan)} · TAEG ${loan.taeg===null?'not entered':rate(loan.taeg)} · ${money(loan.monthlyCosts)} monthly costs · interest duty ${percent(loan.interestTax)}.`;
   try{
     const s=scenarioValues(),{baseline,shorter,lower}=compareLoan(loan,s);loanComparison={loan,baseline,shorter};
     const row=(label,value)=>`<div><span>${label}</span><strong>${value}</strong></div>`;
@@ -406,6 +411,16 @@ function updateLoanSimulation(){
     $('#scenario-error').textContent='';$('#export-loan').disabled=false;
   }catch(error){$('#scenario-error').textContent=error.message;$('#loan-result').innerHTML='<p class="empty">Adjust the scenario to see your earlier payoff.</p>';$('#loan-chart').innerHTML='';$('#loan-schedule').innerHTML='';$('#export-loan').disabled=true;}
 }
+function toggleLoanRate(){
+  const f=$('#loan-form'),variable=f.elements.rateType.value==='variable';
+  $('#loan-index-fields').hidden=!variable;
+  f.elements.indexRate.disabled=!variable;f.elements.spread.disabled=!variable;
+  // TAN is the sum whenever both parts are known, so it is shown, not asked for.
+  const derived=variable&&f.elements.indexRate.value!==''&&f.elements.spread.value!=='';
+  if(derived)f.elements.tan.value=(Math.round((Number(f.elements.indexRate.value)+Number(f.elements.spread.value))*1000)/1000).toFixed(3);
+  f.elements.tan.readOnly=derived;
+  $('#tan-note').textContent=derived?'Index plus spread. Clear either to enter a TAN directly.':'Enter the rate your schedule runs on.';
+}
 function updateLoanDates(){
   const f=$('#loan-form');
   try{const term=loanDates(f.elements.start.value,f.elements.end.value,Number(f.elements.paymentDay.value));$('#loan-date-summary').textContent=`${term.months} payments, starting ${dateLabel(dueDate(term.firstMonth,Number(f.elements.paymentDay.value)))}. Enter principal outstanding before this first payment.`;}
@@ -413,17 +428,18 @@ function updateLoanDates(){
 }
 function openLoan(l){
   $('#loan-form').elements.accountId.innerHTML='<option value="">Unassigned</option>'+accountOptions();
-  openRecord('loan-form',l?{...l,balance:eurInput(l.balance),monthlyCosts:eurInput(l.monthlyCosts),taeg:l.taeg??'',accountId:l.accountId||''}:{id:'',start:today(),end:'',paymentDay:Number(today().slice(8)),monthlyCosts:0,interestTax:0,kind:'mortgage',rateType:'variable'});
-  $('#loan-form').elements.tracked.checked=l?l.tracked:true;updateLoanDates();
+  openRecord('loan-form',l?{...l,balance:eurInput(l.balance),monthlyCosts:eurInput(l.monthlyCosts),taeg:l.taeg??'',indexRate:l.indexRate??'',spread:l.spread??'',accountId:l.accountId||''}:{id:'',start:today(),end:'',paymentDay:Number(today().slice(8)),monthlyCosts:0,interestTax:0,indexRate:'',spread:'',kind:'mortgage',rateType:'variable'});
+  $('#loan-form').elements.tracked.checked=l?l.tracked:true;toggleLoanRate();updateLoanDates();
 }
 for(const name of ['start','end','paymentDay'])$('#loan-form').elements[name].addEventListener('input',updateLoanDates);
+for(const name of ['rateType','indexRate','spread'])$('#loan-form').elements[name].addEventListener('input',toggleLoanRate);
 $('#add-loan').addEventListener('click',()=>openLoan());
 $('#loan-form').elements.kind.addEventListener('change',()=>{$('#loan-form').elements.interestTax.value=$('#loan-form').elements.kind.value==='mortgage'?0:4;});
 $('#loan-form').addEventListener('submit',event=>{
   event.preventDefault();const f=event.currentTarget;try{
     const v=Object.fromEntries(new FormData(f));
     const old=state.loans.find(l=>l.id===v.id);
-    const loan={...v,...loanDates(v.start,v.end,Number(v.paymentDay)),id:v.id||crypto.randomUUID(),name:v.name.trim(),balance:cents(v.balance),paymentDay:Number(v.paymentDay),accountId:v.accountId||null,posted:old?.posted||[],tan:Number(v.tan),taeg:v.taeg===''?null:Number(v.taeg),monthlyCosts:cents(v.monthlyCosts||'0'),interestTax:Number(v.interestTax),tracked:f.elements.tracked.checked};
+    const loan={...v,...loanDates(v.start,v.end,Number(v.paymentDay)),id:v.id||crypto.randomUUID(),name:v.name.trim(),balance:cents(v.balance),paymentDay:Number(v.paymentDay),accountId:v.accountId||null,posted:old?.posted||[],tan:Number(v.tan),indexRate:v.indexRate?Number(v.indexRate):null,spread:v.spread?Number(v.spread):null,taeg:v.taeg===''?null:Number(v.taeg),monthlyCosts:cents(v.monthlyCosts||'0'),interestTax:Number(v.interestTax),tracked:f.elements.tracked.checked};
     if(v.id&&!state.loans.some(l=>l.id===v.id))throw new Error('This loan was removed in another tab.');
     amortize(loan);
     commitRecord(f,{...state,loans:v.id?state.loans.map(l=>l.id===v.id?loan:l):[...state.loans,loan]});

@@ -30,11 +30,17 @@ export function validateLoan(input) {
     l.start=`${l.firstMonth}-01`;l.end=dueDate(addMonth(l.firstMonth,l.months-1),31);
   }
   l.paymentDay=l.paymentDay===undefined?1:l.paymentDay;
+  l.indexRate=l.indexRate===undefined?null:l.indexRate;
+  l.spread=l.spread===undefined?null:l.spread;
+  // Variable loans are quoted as Euribor + spread; their sum is the TAN the
+  // schedule runs on. Fixed phases have neither, so stale values are dropped.
+  if(l.rateType!=='variable'){l.indexRate=null;l.spread=null;}
+  else if(l.indexRate!==null&&l.spread!==null&&Number.isFinite(l.indexRate)&&Number.isFinite(l.spread))l.tan=Math.round((l.indexRate+l.spread)*1000)/1000;
   l.accountId=l.accountId===undefined?null:l.accountId;
   l.posted=l.posted===undefined?[]:l.posted;
   l={...l,...loanDates(l.start,l.end,l.paymentDay)};
-  if(typeof l.id!=='string'||!l.id||l.id.length>100||typeof l.name!=='string'||!l.name.trim()||l.name.length>100||!Object.hasOwn(LOAN_KINDS,l.kind)||!['fixed','variable'].includes(l.rateType)||!moneyOK(l.balance)||l.balance===0||!Number.isFinite(l.tan)||l.tan<0||l.tan>50||!(l.taeg===null||Number.isFinite(l.taeg)&&l.taeg>=0&&l.taeg<=100)||!moneyOK(l.monthlyCosts)||typeof l.tracked!=='boolean'||!Number.isFinite(l.interestTax)||l.interestTax<0||l.interestTax>100||!(l.accountId===null||typeof l.accountId==='string'&&l.accountId.length>0&&l.accountId.length<=100)||!Array.isArray(l.posted)||l.posted.length>2600||!l.posted.every(validMonth)||new Set(l.posted).size!==l.posted.length)throw new Error('Check the loan amount, dates, rates, account and payment history.');
-  return Object.fromEntries(['id','name','kind','rateType','balance','months','tan','taeg','monthlyCosts','firstMonth','tracked','interestTax','start','end','paymentDay','accountId','posted'].map(k=>[k,l[k]]));
+  if(typeof l.id!=='string'||!l.id||l.id.length>100||typeof l.name!=='string'||!l.name.trim()||l.name.length>100||!Object.hasOwn(LOAN_KINDS,l.kind)||!['fixed','variable'].includes(l.rateType)||!moneyOK(l.balance)||l.balance===0||!Number.isFinite(l.tan)||l.tan<0||l.tan>50||!(l.indexRate===null||Number.isFinite(l.indexRate)&&l.indexRate>=-5&&l.indexRate<=50)||!(l.spread===null||Number.isFinite(l.spread)&&l.spread>=0&&l.spread<=10)||!(l.taeg===null||Number.isFinite(l.taeg)&&l.taeg>=0&&l.taeg<=100)||!moneyOK(l.monthlyCosts)||typeof l.tracked!=='boolean'||!Number.isFinite(l.interestTax)||l.interestTax<0||l.interestTax>100||!(l.accountId===null||typeof l.accountId==='string'&&l.accountId.length>0&&l.accountId.length<=100)||!Array.isArray(l.posted)||l.posted.length>2600||!l.posted.every(validMonth)||new Set(l.posted).size!==l.posted.length)throw new Error('Check the loan amount, dates, rates, account and payment history.');
+  return Object.fromEntries(['id','name','kind','rateType','balance','months','tan','indexRate','spread','taeg','monthlyCosts','firstMonth','tracked','interestTax','start','end','paymentDay','accountId','posted'].map(k=>[k,l[k]]));
 }
 export function monthlyPayment(balance,tan,months) {
   if(!balance)return 0;
