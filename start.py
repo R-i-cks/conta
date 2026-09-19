@@ -12,10 +12,13 @@ import webbrowser
 ROOT = Path(__file__).resolve().parent
 URL = "http://localhost:4173"
 ALLOWED_HOSTS = {"localhost:4173", "127.0.0.1:4173"}
-PUBLIC_FILES = {"index.html", "styles.css", "app.mjs", "core.mjs", "payroll.mjs", "loans.mjs", "planning.mjs", "investments.mjs"}
+PUBLIC_FILES = {"index.html", "styles.css", "app.mjs", "core.mjs", "payroll.mjs", "loans.mjs", "planning.mjs", "investments.mjs",
+                "dm-sans-variable-latin.woff2", "manrope-variable-latin.woff2"}
 
 
 class AppHandler(SimpleHTTPRequestHandler):
+    extensions_map = {**SimpleHTTPRequestHandler.extensions_map, ".woff2": "font/woff2"}
+
     def allowed_host(self):
         """Refuse hostnames that resolve here from elsewhere, such as DNS rebinding."""
         if self.headers.get("Host") in ALLOWED_HOSTS:
