@@ -4,7 +4,8 @@ Reviewed 19 September 2026 by Claude Opus 5 (Claude Code), at the owner's reques
 Scope: every source file in the repository at first commit — `index.html`, `styles.css`,
 `app.mjs`, `core.mjs`, `payroll.mjs`, `loans.mjs`, `planning.mjs`, `investments.mjs`,
 `start.py`, `start.sh`, plus the two test files. Findings marked **fixed** were applied
-in commit `19dc2f2`; the rest are open and listed with a recommendation, not a patch.
+in commit `19dc2f2` and the follow-up commits on `main`; the rest are open and listed with
+a recommendation, not a patch.
 
 ## Threat model
 
@@ -26,11 +27,12 @@ of a successful attack is disclosure of the owner's financial records, not funds
 | 1 | No Content-Security-Policy behind ~40 `innerHTML` sinks | Medium | Fixed |
 | 2 | No `Host` header check; loopback bind does not stop DNS rebinding | Low | Fixed |
 | 3 | Loan CSV export bypassed the formula-injection guard | Low | Fixed |
-| 4 | `styles.css` fetches Google Fonts — app is not offline as documented | Low | Open |
+| 4 | `styles.css` fetches Google Fonts — app is not offline as documented | Low | Fixed |
 | 5 | Calendar year hardcoded to 2026; planning broke on 2027-01-01 | Medium (correctness) | Fixed |
-| 6 | Three withholding tables claimed in the UI, two implemented | Unknown — needs the despacho | Open |
+| 6 | Three withholding tables claimed in the UI, two implemented | None — verified correct | Closed |
 | 7 | Large workspaces freeze the tab: no pagination, full re-render per keystroke | Low | Open |
 | 8 | `compareLoan` runs three full amortisations on every keystroke | Trivial | Open |
+| 9 | Owner's real salary and age shipped as code defaults | Low (privacy) | Fixed |
 
 ### 1. No Content-Security-Policy — fixed
 
@@ -69,18 +71,21 @@ since that export emits only numbers and `YYYY-MM` strings, but it was one added
 away from writing an executable cell into a spreadsheet. There is now a single exported
 `csvCell` in `core.mjs:138` and all three exports call it.
 
-### 4. Google Fonts — open
+### 4. Google Fonts — fixed
 
 `styles.css:1` is `@import url('https://fonts.googleapis.com/...')` for DM Sans and Manrope.
 The README says no network is needed; that is not true today. Every launch tells Google the
 owner's IP and user-agent. No financial data leaks — the request carries only the font URL —
 but it contradicts the app's own framing, and it means the app degrades without internet.
 
-Two honest options. Self-host the two font files next to the app and add them to
-`PUBLIC_FILES`, which keeps the typography and makes the claim true. Or drop the `@import`
-for a system stack, which is one line and changes the look. Either way, `font-src` and the
-`fonts.googleapis.com` entry then come out of the CSP. Left alone because it is a visual
-decision, not a defect.
+Self-hosted rather than dropped, so the typography survives and the claim becomes true.
+Both families are now bundled as variable `latin`-subset woff2 files (62 KB together),
+listed in `PUBLIC_FILES`, and served as `font/woff2` via an `extensions_map` entry. The CSP
+lost both Google hosts: `style-src 'self' 'unsafe-inline'` and `font-src 'self'`. Licensing
+and re-download instructions are in `FONTS.md`; both families are SIL OFL 1.1, whose full
+text ships with them as the licence requires. Verified by request: both files return 200
+with the right MIME and `wOF2` magic bytes, and `styles.css` no longer contains an
+`@import`.
 
 ### 5. Calendar year hardcoded to 2026 — fixed
 
@@ -98,7 +103,7 @@ that 2026 tables, meal limits and IAS are being reused, so the number is never s
 wrong. A related bug went with it: the meal-day ceiling used a hardcoded 2026, so February
 2028 clamped to 28 days instead of 29 — it now derives the year from the row.
 
-### 6. Tables I, II and III — open, needs the source
+### 6. Tables I, II and III — verified correct, closed
 
 The UI prints "Table I / II / III" (`app.mjs:283`), and the README cites tables I–III of
 Despacho 233-A/2026. The code has two rate tables: `PAYROLL_TABLE` serves both `single` and
@@ -106,12 +111,21 @@ Despacho 233-A/2026. The code has two rate tables: `PAYROLL_TABLE` serves both `
 larger per-dependant abatement — 34.29 for single, 21.43 for married-two, 42.86 for
 married-one (`payroll.mjs:43`).
 
-That is plausibly right: in the post-2023 table format, I and II may well share rates and
-parcelas and differ only in that allowance, which is exactly what those three distinct
-constants suggest. It is also the single assumption that, if wrong, makes every
-single-with-dependants estimate wrong. It cannot be settled from the code — check
-`payroll.mjs` against the despacho itself. The assumption is now recorded in a comment at
-`payroll.mjs:3-4` so it is not mistaken for a verified fact.
+Checked on 19 September 2026 against the despacho as published (2.ª série, N.º 3,
+suplemento, 06-01-2026, pages 3–5). **The implementation is correct.** Tabela I ("não casado
+sem dependentes ou casado dois titulares") and Tabela II ("não casado com um ou mais
+dependentes") carry identical limits, marginal rates and parcelas a abater; they differ in
+one column only, the parcela adicional a abater por dependente — 21,43 against 34,29. Tabela
+III ("casado, único titular") uses 42,86. Every limit, rate and parcela in `PAYROLL_TABLE`
+and `SINGLE_EARNER_TABLE` matches the published figures, and the first band's 0,00 per
+dependant is handled by `index===0?0` in `payroll.mjs:43`.
+
+Two neighbouring rules were confirmed in passing. Alínea h) of §5 reduces the marginal rate
+by one percentage point for three or more dependants "mantendo-se inalterada a parcela a
+abater e a parcela adicional a abater" — which is what `payroll.mjs:40-42` does, keeping the
+variable abatement on the published base rate. Alínea g) caps the monthly IRS Jovem exemption
+at the article 12.º-B limit divided by 14, matching `YOUTH_CAP/14`. The verification is
+recorded in a comment at `payroll.mjs:2-4`.
 
 ### 7. Large workspaces freeze the tab — open
 
@@ -135,6 +149,21 @@ building before real data justifies it.
 `toggle` event instead. Microseconds today on a mortgage; the consumer fixed-rate path has a
 nested loop that makes it quadratic, so it is worth knowing about before someone widens the
 term limits.
+
+### 9. Personal defaults in shipped code — fixed
+
+`defaultPayroll()` started at €1,300 gross and age 24, `sampleState()` overrode the sample
+workspace to the same salary, and the README stated both in prose and worked a full
+net-pay table from them. Harmless in a private repository and invisible to the app's own
+users, but it is real personal data sitting in source control, and it would have travelled
+with the first public push — the kind of thing an ignore rule cannot take back afterwards.
+
+Defaults are now €1,000 and age 30, labelled in a comment as placeholders. Nothing is lost:
+saved payroll settings live in `localStorage` and override the defaults, so an existing
+workspace keeps its real figures. The README's worked example was recomputed from the new
+placeholder rather than deleted, so it still demonstrates the 12-versus-14 arithmetic, and
+four tests that had silently depended on the old default now pin `gross` and `age`
+themselves — which is where those values belonged anyway.
 
 ## What is good
 
@@ -174,12 +203,14 @@ years, this is worth more than it looks.
 
 ## For whoever picks this up next
 
-1. Settle finding 6 against Despacho 233-A/2026. It is the only open item that can make a
-   displayed number wrong.
-2. Decide finding 4 — self-host the fonts or drop them — and tighten the CSP accordingly.
-3. Leave findings 7 and 8 until real usage justifies them.
-4. `README.md` and `defaultPayroll()` contain the owner's actual salary and age. Fine in a
-   personal repository; strip them before any public push.
+1. Nothing blocks a public push. Findings 1–6 are resolved; 7 and 8 are scale and
+   micro-performance items with no correctness or security impact.
+2. Leave findings 7 and 8 until real usage justifies them. Both have a named fix above.
+3. The rates carry a 2026 verification date. Re-check `payroll.mjs`, `core.mjs` and the
+   fee constants in `loans.mjs` against their sources when the 2027 figures publish; the
+   app reuses 2026 values for later years and says so on screen, but it cannot know better.
+4. Fonts are bundled. If the typography is ever changed, update `FONTS.md`, `PUBLIC_FILES`
+   and the CSP together.
 
 Re-run the checks with:
 
