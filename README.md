@@ -1,6 +1,6 @@
 # Conta
 
-A local personal finance tracker for mainland Portugal: cash accounts, investments, spending and 2026 IRS calculations. Python 3 is the only runtime requirement; no build, package install or bank credentials are needed.
+A local personal finance tracker for mainland Portugal: cash accounts, investments, spending and 2026 IRS calculations. Python 3 is the only runtime requirement; no build, package install or bank credentials are needed. Fonts are bundled, so the app loads nothing from the internet.
 
 ## Launch locally
 
@@ -17,7 +17,7 @@ The launcher opens **http://localhost:4173** in your browser. Keep the terminal 
 
 For a terminal without a graphical browser, use `./start.sh --no-browser`. You can also run `python3 start.py` directly, including on Windows. Always use the same browser profile and URL: `localhost` and `127.0.0.1` have separate browser storage.
 
-The first launch displays labelled sample records. Choose **Start my finances** for an empty workspace. Your salary defaults are €1,300 base, age 24, first eligible income year, and €9.60 meal card per paid working day. IRS Jovem requires confirmation of eligibility and whether your employer applies it. The default 22 meal days/month and 242/year are editable planning assumptions.
+The first launch displays labelled sample records. Choose **Start my finances** for an empty workspace. The salary fields start from placeholder values — €1,000 base, age 30, first eligible income year, €9.60 meal card per paid working day — which are not anyone's pay; replace them with yours. IRS Jovem requires confirmation of eligibility and whether your employer applies it. The default 22 meal days/month and 242/year are editable planning assumptions.
 
 ## What is included
 
@@ -32,7 +32,7 @@ Bank accounts and quotes are tracked manually. No bank login, live market feed, 
 
 ## Monthly salary, meals and first-year benefits
 
-The monthly calculator supports **resident mainland employees in the general 11% employee Social Security regime, without disability**, using tables I–III of Despacho 233-A/2026. Choose not married, married/two earners, or married/one earner, and the number of dependants. The applicable marginal withholding rate is reduced by the table's parcela a abater and dependant allowance. The additional one-percentage-point reduction for three or more dependants is included. IRS is rounded down to whole euros under CIRS 99-E.
+The monthly calculator supports **resident mainland employees in the general 11% employee Social Security regime, without disability**, using tables I–III of Despacho 233-A/2026, checked against the published despacho on 19 September 2026. Choose not married, married/two earners, or married/one earner, and the number of dependants. The applicable marginal withholding rate is reduced by the table's parcela a abater and dependant allowance. The additional one-percentage-point reduction for three or more dependants is included. IRS is rounded down to whole euros under CIRS 99-E.
 
 Monthly withholding bands are different from annual IRS bands. The implemented official tables apply from January 2026. A month in a later year may be selected for planning; the 2026 tables, meal limits and IAS are then reused and the result says so. This is a payslip estimate, not a final annual IRS settlement. Overtime, disability tables, partial employment years, multiple employers, other special regimes and additional remuneration are outside the model.
 
@@ -50,21 +50,21 @@ The 2026 daily exemption is €6.15 for cash and €10.46 for a meal card. Only 
 
 ### 12 versus 14 payments
 
-**Both schedules preserve 14 × monthly base salary annually**, so €1,300 means €18,200 in either case. With 14 payments, show the regular month and two separate net allowances. With 12 payments, apportion holiday and Christmas allowances in twelfths. Their withholding is calculated autonomously on each full allowance, then apportioned, in accordance with CIRS 99-C(5–6); they are not added to base salary to look up a higher band. SS applies to the month's contribution base. Cent rounding can cause small differences that payroll may reconcile.
+**Both schedules preserve 14 × monthly base salary annually**, so €1,000 means €14,000 in either case. With 14 payments, show the regular month and two separate net allowances. With 12 payments, apportion holiday and Christmas allowances in twelfths. Their withholding is calculated autonomously on each full allowance, then apportioned, in accordance with CIRS 99-C(5–6); they are not added to base salary to look up a higher band. SS applies to the month's contribution base. Cent rounding can cause small differences that payroll may reconcile.
 
-For the supplied profile, with 22 meal-card days and first-year IRS Jovem eligibility and employer application confirmed:
+Worked from the placeholder profile above, with 22 meal-card days and first-year IRS Jovem eligibility and employer application confirmed:
 
 | Item | 14-payment ordinary month | 12 payments with duodécimos |
 |---|---:|---:|
-| Base salary | €1,300.00 | €1,300.00 |
-| Gross duodécimos | — | €216.66 |
+| Base salary | €1,000.00 | €1,000.00 |
+| Gross duodécimos | — | €166.66 |
 | IRS withholding | €0.00 | €0.00 |
-| Employee SS | €143.00 | €166.83 |
-| Bank deposit | €1,157.00 | €1,349.83 |
+| Employee SS | €110.00 | €128.33 |
+| Bank deposit | €890.00 | €1,038.33 |
 | Meal card | €211.20 | €211.20 |
-| Combined net value | **€1,368.20** | **€1,561.03** |
+| Combined net value | **€1,101.20** | **€1,249.53** |
 
-Each separately paid allowance in the 14-payment schedule is €1,157 net, without meals. These figures assume a complete salary month, the general SS regime and the entered eligibility conditions.
+Each separately paid allowance in the 14-payment schedule is €890.00 net, without meals. These figures assume a complete salary month, the general SS regime and the entered eligibility conditions.
 
 The full-year projection assumes unchanged pay for a complete year. It distributes the entered annual meal days evenly over twelve months to estimate withholding, and is labelled as a planning estimate. It is not a final annual IRS liability or the user's actual first-year earnings.
 

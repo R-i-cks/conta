@@ -23,7 +23,6 @@ function sampleState() {
   sample.accounts=[{id:'demo-bank',name:'Everyday account',bank:'Sample bank',kind:'Current',opening:100000},{id:'demo-savings',name:'A little breathing room',bank:'Sample bank',kind:'Savings',opening:450000}];
   sample.transactions=sample.transactions.map(t=>({...t,accountId:'demo-bank'}));
   sample.holdings=[{id:'demo-etf',name:'Global equity fund · sample',symbol:'DEMO',broker:'Sample broker',kind:'ETF',units:40,cost:400000,price:112.5,updated:today()}];
-  sample.payroll.gross=130000;
   return sample;
 }
 let state;

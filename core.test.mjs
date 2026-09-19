@@ -86,7 +86,7 @@ test('monthly employee withholding uses correct tables and abatements, not a fla
   }
 });
 test('first-year IRS Jovem at age 24 exempts IRS while preserving employee SS and meal-card value',()=>{
-  const p={...defaultPayroll(),youth:true,eligible:true,employerApplied:true};
+  const p={...defaultPayroll(),gross:130000,age:24,youth:true,eligible:true,employerApplied:true};
   const r=calculatePayroll(p);
   assert.equal(r.irs,0);assert.equal(r.ss,14300);assert.equal(r.meal,21120);
   assert.equal(r.net,136820);assert.equal(r.bankNet,115700);assert.equal(r.mealCard,21120);
@@ -99,7 +99,7 @@ test('first-year IRS Jovem at age 24 exempts IRS while preserving employee SS an
   assert.ok(calculatePayroll({...p,careerYear:2,mealDays:0}).irs>0);
 });
 test('meal cash excess is subject to SS and IRS; card allowance under limit stays exempt',()=>{
-  const p={...defaultPayroll(),youth:true,eligible:true,employerApplied:true,mealMethod:'cash'};
+  const p={...defaultPayroll(),gross:130000,age:24,youth:true,eligible:true,employerApplied:true,mealMethod:'cash'};
   const r=calculatePayroll(p);
   assert.equal(r.mealTaxable,(960-615)*22);assert.equal(r.ss,15135);
   assert.equal(r.irs,0);assert.equal(r.mealCard,0);assert.equal(r.bankNet,r.net);
@@ -108,7 +108,7 @@ test('meal cash excess is subject to SS and IRS; card allowance under limit stay
   assert.throws(()=>calculatePayroll({...p,mealDays:32}));
 });
 test('duodécimos preserve annual salary, tax allowances separately and never multiply meal days by 14',()=>{
-  const p={...defaultPayroll(),youth:true,eligible:true,employerApplied:true};
+  const p={...defaultPayroll(),gross:130000,age:24,youth:true,eligible:true,employerApplied:true};
   const a=calculatePayroll(p),b=calculatePayroll({...p,payments:12});
   assert.equal(a.annualGross,b.annualGross);assert.equal(a.annualNet,b.annualNet);
   assert.equal(a.annualMeal,960*242);assert.equal(a.meal,b.meal);
@@ -193,7 +193,7 @@ test('monthly expenses clamp short months, honour start/end/pause and post only 
   assert.throws(()=>validateState({...posted,transactions:[...posted.transactions,{...posted.transactions.at(-1),id:'duplicate'}]}));
 });
 test('year-end forecast separates cash/card, allowances and commitments for both salary schedules',()=>{
-  const s=validateState(backup);s.payroll={...defaultPayroll(),youth:true,eligible:true,employerApplied:true};s.forecast=defaultForecast(s.payroll);
+  const s=validateState(backup);s.payroll={...defaultPayroll(),gross:130000,age:24,youth:true,eligible:true,employerApplied:true};s.forecast=defaultForecast(s.payroll);
   s.recurring=[{...recurring,start:'2026-09-01',end:'',day:1}];s.loans=[{...loan,kind:'car',balance:120000,months:12,tan:0,monthlyCosts:0}];
   const result=projectYear(s);assert.equal(result.rows.length,4);
   assert.equal(result.rows[0].bank,115700);assert.equal(result.rows[0].mealCard,21120);assert.equal(result.rows[0].ss,14300);

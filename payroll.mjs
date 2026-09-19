@@ -1,7 +1,8 @@
 // 2026 mainland employees, general Social Security regime, without disability.
 // Despacho 233-A/2026 tables I–III; CIRS 12-B, 99-E, 99-F.
-// Tables I and II share these rates and parcelas; they differ only in the
-// per-dependant abatement below. Re-check against the despacho when updating.
+// Verified 19 September 2026 against the published despacho (2.a serie, N.o 3,
+// suplemento, 06-01-2026): tables I and II are identical except for the parcela
+// adicional a abater por dependente, 21.43 vs 34.29; table III uses 42.86.
 export const IAS = 53713; // cents; Portaria 480-A/2025/1
 export const YOUTH_CAP = 55 * IAS;
 export const MEAL_LIMITS={cash:615,card:1046}; // CIRS 2(3)(b)(2), Portaria 51-B/2026/1.
@@ -18,9 +19,10 @@ export const SINGLE_EARNER_TABLE = [
   [2240,19.38,213.53], [2773,22.77,289.47], [3389,25.7,370.72],
   [5965,28.81,476.12], [20265,38.43,1049.96], [Infinity,47.17,2821.13],
 ];
-export const defaultPayroll = () => ({gross:130000,month:'2026-09',family:'single',dependants:0,payments:14,
+// Placeholder starting values, not anyone's pay. Saved settings override them.
+export const defaultPayroll = () => ({gross:100000,month:'2026-09',family:'single',dependants:0,payments:14,
   mealDaily:960,mealDays:22,mealMethod:'card',annualMealDays:242,
-  youth:false,age:24,careerYear:1,eligible:false,employerApplied:false});
+  youth:false,age:30,careerYear:1,eligible:false,employerApplied:false});
 export function validatePayroll(p) {
   if (!p || !Number.isSafeInteger(p.gross) || p.gross<0 || p.gross>100_000_000_000 ||
     !/^\d{4}-(0[1-9]|1[0-2])$/.test(p.month) || p.month<'2026-01' || p.month>'2100-12' || !['single','married-two','married-one'].includes(p.family) ||
