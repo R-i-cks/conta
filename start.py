@@ -6,7 +6,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -20,12 +23,14 @@ ROOT = Path(__file__).resolve().parent
 PORT = 4173
 URL = f"http://localhost:{PORT}"
 ALLOWED_HOSTS = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
-PUBLIC_FILES = {"index.html", "styles.css", "app.mjs", "core.mjs", "payroll.mjs", "loans.mjs", "planning.mjs", "investments.mjs",
+PUBLIC_FILES = {"index.html", "styles.css", "app.mjs", "core.mjs", "payroll.mjs", "loans.mjs", "planning.mjs", "investments.mjs", "statement.mjs",
                 "dm-sans-variable-latin.woff2", "manrope-variable-latin.woff2"}
 DATA_FILE = ROOT / "conta-data.json"
 HISTORY_DIR = ROOT / "history"
 HISTORY_KEEP = 30
 MAX_BODY = 20 * 1024 * 1024
+MAX_PDF = 10 * 1024 * 1024
+MAX_PDF_TEXT = 4 * 1024 * 1024
 DATA_LOCK = threading.Lock()
 QUOTE_SYMBOL = re.compile(r"^[A-Z0-9.^=-]{1,20}$", re.I)
 
@@ -77,6 +82,41 @@ def write_data(body):
     return hashlib.sha256(body).hexdigest()[:32]
 
 
+def pdf_to_text(source):
+    """Capture at most 4 MB of text and 16 KB of errors from pdftotext."""
+    process = subprocess.Popen(["pdftotext", "-layout", "-nopgbrk", "-enc", "UTF-8",
+                                str(source), "-"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    parts = {}
+    overflow = threading.Event()
+
+    def read_bounded(name, pipe, limit):
+        chunks, remaining = [], limit + 1
+        while remaining:
+            chunk = pipe.read(min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        parts[name] = b"".join(chunks)
+        if remaining == 0:
+            overflow.set()
+
+    readers = [threading.Thread(target=read_bounded, args=("text", process.stdout, MAX_PDF_TEXT), daemon=True),
+               threading.Thread(target=read_bounded, args=("error", process.stderr, 16384), daemon=True)]
+    for reader in readers:
+        reader.start()
+    deadline = time.monotonic() + 15
+    while process.poll() is None and not overflow.is_set() and time.monotonic() < deadline:
+        time.sleep(.02)
+    timed_out = process.poll() is None and not overflow.is_set()
+    if process.poll() is None:
+        process.kill()
+    process.wait()
+    for reader in readers:
+        reader.join()
+    return process.returncode, parts["text"], parts["error"], len(parts["text"]) > MAX_PDF_TEXT, timed_out
+
+
 class AppHandler(SimpleHTTPRequestHandler):
     extensions_map = {**SimpleHTTPRequestHandler.extensions_map, ".woff2": "font/woff2"}
 
@@ -100,7 +140,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def same_origin(self):
+    def same_origin(self, content_type="application/json"):
         """Only the page itself may write. A cross-site form cannot send PUT with
         a JSON content type, and a cross-origin fetch is stopped by the preflight
         this server never answers; Sec-Fetch-Site closes the gap in older cases."""
@@ -110,7 +150,62 @@ class AppHandler(SimpleHTTPRequestHandler):
             return False
         if origin is not None and origin not in (f"http://{h}" for h in ALLOWED_HOSTS):
             return False
-        return self.headers.get("Content-Type", "").split(";")[0].strip() == "application/json"
+        return self.headers.get("Content-Type", "").split(";")[0].strip() == content_type
+
+    def do_POST(self):
+        if not self.allowed_host():
+            return
+        if urlsplit(self.path).path != "/pdf-text":
+            self.send_error(404, "Not found")
+            return
+        if not self.same_origin("application/pdf"):
+            self.send_error(403, "Conta only accepts PDFs from its own page")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            length = -1
+        if length < 1 or length > MAX_PDF:
+            self.respond(413, b'{"error":"PDF must be smaller than 10 MB."}')
+            return
+        self.connection.settimeout(15)
+        try:
+            body = self.rfile.read(length)
+        except TimeoutError:
+            self.respond(408, b'{"error":"PDF upload timed out."}')
+            return
+        if len(body) != length or b"%PDF-" not in body[:1024]:
+            self.respond(400, b'{"error":"Choose a valid PDF statement."}')
+            return
+        if not shutil.which("pdftotext"):
+            self.respond(503, b'{"error":"PDF import needs pdftotext (Poppler) installed on this computer."}')
+            return
+        try:
+            with tempfile.TemporaryDirectory(prefix="conta-pdf-") as temp:
+                source = Path(temp) / "statement.pdf"
+                source.write_bytes(body)
+                code, data, errors, oversized, timed_out = pdf_to_text(source)
+                if timed_out:
+                    self.respond(422, b'{"error":"PDF took too long to read."}')
+                    return
+                if code or oversized:
+                    detail = errors.decode("utf-8", "replace").lower()
+                    if "password" in detail or "encrypt" in detail:
+                        message = "This PDF is encrypted. Export an unlocked statement."
+                    elif oversized:
+                        message = "Statement text is too large to import."
+                    else:
+                        message = "Could not read this PDF statement."
+                    self.respond(422, json.dumps({"error": message}).encode())
+                    return
+        except OSError:
+            self.respond(422, b'{"error":"Could not read this PDF statement."}')
+            return
+        text = data.decode("utf-8", "replace")
+        if not text.strip():
+            self.respond(422, b'{"error":"No selectable text found. This may be a scanned PDF; export a text-based statement."}')
+            return
+        self.respond(200, json.dumps({"text": text}).encode())
 
     def do_PUT(self):
         if not self.allowed_host():

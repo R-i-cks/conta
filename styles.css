@@ -21,4 +21,5 @@
 
 .field-status{font-size:10px;font-weight:400;color:var(--muted);margin-left:6px}.payment-row{min-width:0}.payment-row>div:first-child{overflow-wrap:anywhere}.payment-row .button{white-space:normal}#overview-cash{margin-bottom:12px}
 .record-form,.record-form label,.record-form input,.record-form select{min-width:0}.record-form select{max-width:100%}.form-row{grid-template-columns:repeat(2,minmax(0,1fr))}
+.shortcut{display:flex;align-items:center;gap:3px;border:1px solid var(--line);border-radius:9px;padding:3px}.shortcut .button{border:0}.shortcut-panel .panel-heading{margin-bottom:12px}.cash-buffer-form{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin-top:16px}.cash-buffer-form label{max-width:240px;flex:1 1 180px}.cash-buffer-form .error{flex-basis:100%;margin:0}
 @media(max-width:450px){dialog .form-row{grid-template-columns:1fr}}

@@ -45,7 +45,7 @@ const transaction={id:'one',date:'2026-09-01',description:'Salary',type:'income'
 const backup={version:1,demo:false,transactions:[transaction],tax:{taxable:3600000,joint:false}};
 test('backup roundtrip and cents-based totals', () => {
   const migrated=validateState(JSON.parse(JSON.stringify(backup)));
-  assert.equal(migrated.version,4);
+  assert.equal(migrated.version,5);
   assert.deepEqual(migrated.transactions,[{...transaction,accountId:null}]);
   assert.deepEqual(migrated.tax,backup.tax);
   assert.deepEqual(validateState(JSON.parse(JSON.stringify(migrated))),migrated);
@@ -318,14 +318,16 @@ test('unit-based contributions add fractional shares and keep newer quotes',()=>
   assert.equal(next.holdings[0].units,3.375);assert.equal(next.holdings[0].price,120);
   assert.equal(undoContribution(next,'fraction').holdings[0].units,2.5);
 });
-test('version 3 migrates all money and posting history into version 4',()=>{
+test('version 3 migrates all money and posting history into version 5',()=>{
   const old={...cashWorkspace(),version:3,loans:[loan],holdings:[ppr],recurring:[recurring]};
   delete old.investmentPlans;delete old.contributions;
   old.forecast={start:'2026-09',rows:old.forecast.rows};
   const migrated=validateState(old);
-  assert.equal(migrated.version,4);assert.deepEqual(migrated.recurring,old.recurring);
+  assert.equal(migrated.version,5);assert.deepEqual(migrated.recurring,old.recurring);
   assert.deepEqual(migrated.transactions,old.transactions);assert.deepEqual(migrated.contributions,[]);
   assert.deepEqual(validateState(JSON.parse(JSON.stringify(migrated))),migrated);
+  assert.equal(validateState({...migrated,version:4}).version,5);
+  assert.throws(()=>validateState({...migrated,version:6}),/valid Conta backup/);
 });
 
 // Calendar years after 2026 reuse the 2026 tables; only the pinning is removed.
@@ -453,6 +455,19 @@ test('the overview exposes scheduled salary and loan movements until they are re
   s.loans[0].posted=['2026-09'];
   assert.deepEqual(expectedMonth(s,'2026-09').movements,[]);
 });
+test('scheduled bills project money out until recorded; investment plans stay out',()=>{
+  const s=cashWorkspace();
+  s.payroll={...defaultPayroll(),month:'2026-10'};s.forecast=defaultForecast(s.payroll);
+  s.recurring=[{id:'rent',description:'Rent',category:'Housing',amount:50000,accountId:'cash',start:'2026-09-01',end:'',day:1,enabled:true,posted:['2026-09']}];
+  s.investmentPlans=[{id:'etf',kind:'investment',holdingId:'h',accountId:'cash',amount:10000,start:'2026-09-01',end:'2026-12-31',day:5,enabled:true,posted:[]}];
+  const rent=scheduledTransactions(s).filter(t=>t.kind==='recurring');
+  assert.deepEqual(rent.map(t=>[t.date,t.type,t.amount]),[['2026-10-01','expense',50000],['2026-11-01','expense',50000],['2026-12-01','expense',50000]],'posted September is not scheduled again');
+  assert.ok(scheduledTransactions(s).every(t=>t.kind!=='investment'));
+  assert.equal(new Set(scheduledTransactions(s).map(t=>t.id)).size,scheduledTransactions(s).length,'ids stay unique');
+});
+test('CSV export dates read dd/mm/yyyy',()=>{
+  assert.ok(toCSV([{...transaction,date:'2026-09-24'}]).includes('"24/09/2026"'));
+});
 test('loan terms read as years and months',()=>{
   assert.equal(termLabel(0),'0 months');
   assert.equal(termLabel(1),'1 month');
@@ -461,4 +476,46 @@ test('loan terms read as years and months',()=>{
   assert.equal(termLabel(13),'1 year 1 month');
   assert.equal(termLabel(29),'2 years 5 months');
   assert.equal(termLabel(240),'20 years','a round term drops the months');
+});
+
+import {loanOutstanding,netWorth,trackedLoanDebt} from './core.mjs';
+test('recorded loan principal changes debt; future plans, edits, deletion and rebasing do not invent repayments',()=>{
+  let s=cashWorkspace();
+  s.loans=[validateLoan({...loan,balance:20000,months:2,tan:0,monthlyCosts:1000,accountId:'cash'})];
+  assert.equal(trackedLoanDebt(s,'2026-09-30'),20000);
+  assert.equal(netWorth(s,'2026-09-30').total,180000);
+  s=validateState(postDueExpenses(s,'2026-09-01',()=> 'instalment'));
+  assert.equal(s.transactions[0].loanPrincipal,10000);
+  assert.equal(loanOutstanding(s,s.loans[0],'2026-08-31'),20000);
+  assert.equal(trackedLoanDebt(s,'2026-09-30'),10000);
+  assert.equal(netWorth(s,'2026-09-30').total,179000,'interest and costs reduce wealth, principal repayment does not');
+  assert.equal(trackedLoanDebt(s,'2027-09-30'),10000,'time alone does not pay the second instalment');
+  s=validateState({...s,loans:[{...s.loans[0],tan:5}],transactions:[{...s.transactions[0],amount:11500}]});
+  assert.equal(trackedLoanDebt(s),10000,'saved principal survives amount and rate edits');
+  assert.equal(trackedLoanDebt({...s,transactions:[]}),20000,'deleting the payment restores debt');
+  const rebased=validateState({...s,loans:[{...s.loans[0],balance:12345,start:'2026-10-01',end:'2026-11-30',posted:['2026-09']}]});
+  assert.equal(trackedLoanDebt(rebased),12345,'older posted instalments do not reduce lender rebased balance');
+  const movedDate=validateState({...rebased,transactions:[{...rebased.transactions[0],date:'2026-10-02'}]});
+  assert.equal(trackedLoanDebt(movedDate),12345,'an old occurrence with a later edited date cannot repay the rebased loan twice');
+});
+test('optional finance fields roundtrip, preserve old asset snapshots and reject bad import identities',()=>{
+  const base={...cashWorkspace(),snapshots:[{date:'2026-09-01',cash:200000,investments:0,cost:0}]};
+  delete base.expenseShortcuts;
+  const s=validateState({...base,accounts:[{...base.accounts[0],reconciledAt:'2026-09-24'}],cashBuffer:25000,merchantRules:[{merchant:'  Super   Market ',category:'Groceries'}]});
+  assert.deepEqual(s.expenseShortcuts.map(x=>x.category),['Fuel','Groceries','Office','Tech']);
+  assert.equal(s.expenseShortcuts[0].accountId,'cash');
+  assert.equal(cashPlan(s,'2026-09','2026-09-24').safeToSpend,175000);
+  assert.equal(s.snapshots[0].debts,undefined,'old snapshots keep their total-assets meaning');
+  assert.deepEqual(s.merchantRules,[{merchant:'super market',category:'Groceries'}]);
+  const newer=validateState({...s,snapshots:[...s.snapshots,{date:'2026-09-24',cash:200000,investments:0,cost:0,debts:10000}]});
+  assert.equal(newer.snapshots[1].debts,10000);
+  assert.deepEqual(validateState(JSON.parse(JSON.stringify(newer))),newer);
+  assert.equal(validateState({...s,expenseShortcuts:[]}).expenseShortcuts.length,0);
+  for(const change of [{cashBuffer:-1},{cashBuffer:1.5},{merchantRules:[{merchant:'x',category:'Bad'}]},{merchantRules:[{merchant:'Shop',category:'Groceries'},{merchant:' shop ',category:'Fuel'}]},{expenseShortcuts:[{...s.expenseShortcuts[0],accountId:'missing'}]},{accounts:[{...s.accounts[0],reconciledAt:'2026-02-30'}]}])assert.throws(()=>validateState({...s,...change}));
+  const imported={id:'bank-item',date:'2026-09-24',description:'Shop',type:'expense',category:'Groceries',amount:1000,accountId:'cash',importSource:'statement',importKey:'row-1'};
+  assert.deepEqual(validateState({...s,transactions:[imported]}).transactions,[imported]);
+  assert.throws(()=>validateState({...s,transactions:[imported,{...imported,id:'duplicate'}]}),/duplicate imported/);
+  const withSecondAccount={...s,accounts:[...s.accounts,{id:'other',name:'Second',bank:'Bank',kind:'Current',opening:0}]};
+  assert.equal(validateState({...withSecondAccount,transactions:[imported,{...imported,id:'same-statement-other-account',accountId:'other'}]}).transactions.length,2);
+  assert.throws(()=>validateState({...s,transactions:[{...imported,importKey:undefined}]}),/imported transaction/);
 });

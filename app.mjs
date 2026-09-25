@@ -1,13 +1,27 @@
 import {validateInvestmentPlan,projectInvestment,recordContribution,undoContribution} from './investments.mjs';
 import {LOAN_KINDS, amortize, compareLoan, loanDates, dueDate} from './loans.mjs';
 import {defaultForecast, validateForecast, projectYear, pendingPayments, cashPlan, postDueExpenses, postSalary, scheduledTransactions, expectedMonth} from './planning.mjs';
-import {BRACKETS, CATEGORIES, ASSET_TYPES, CARD_KIND, cents, calculateTax, totals, monthlyOutflows, validateState, toCSV, csvCell, accountBalances, portfolio, dateLabel, monthLabel, termLabel} from './core.mjs';
+import {BRACKETS, CATEGORIES, ASSET_TYPES, CARD_KIND, cents, calculateTax, totals, monthlyOutflows, validateState, toCSV, csvCell, accountBalances, portfolio, trackedLoanDebt, loanOutstanding, netWorth, dateLabel, monthLabel, termLabel} from './core.mjs';
 import {calculatePayroll, annualTaxableEstimate, YOUTH_CAP} from './payroll.mjs';
+import {parseStatement,identifyImportRows,suggestCategory,rememberMerchant} from './statement.mjs';
 const $ = selector => document.querySelector(selector);
 const money = value => new Intl.NumberFormat('pt-PT', {style:'currency',currency:'EUR'}).format(value / 100);
 const percent = value => new Intl.NumberFormat('en-GB', {maximumFractionDigits:2}).format(value) + '%';
 const rate = value => new Intl.NumberFormat('en-GB', {maximumFractionDigits:3}).format(value) + '%';
 const escape = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+// Native pickers format dates by browser locale; Conta always shows dd/mm/yyyy
+// (mm/yyyy for months). Code keeps reading and writing ISO through .value and FormData.
+const nativeValue=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
+for(const input of document.querySelectorAll('input[type=date],input[type=month]')) {
+  const month=input.type==='month',pattern=month?/^(\d{2})\/(\d{4})$/:/^(\d{2})\/(\d{2})\/(\d{4})$/;
+  Object.assign(input,{type:'text',inputMode:'numeric',placeholder:month?'mm/yyyy':'dd/mm/yyyy',pattern:pattern.source.slice(1,-1),title:month?'mm/yyyy':'dd/mm/yyyy'});
+  input.dataset.isoDate='';
+  Object.defineProperty(input,'value',{
+    get(){const m=pattern.exec(nativeValue.get.call(this).trim());return m?m.slice(1).reverse().join('-'):'';},
+    set(iso){nativeValue.set.call(this,iso?String(iso).split('-').reverse().join('/'):'');},
+  });
+}
+document.addEventListener('formdata',event=>{for(const input of event.target.querySelectorAll('[data-iso-date][name]'))event.formData.set(input.name,input.value);},true);
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const KEY = 'conta-v1';
 const emptyState = () => validateState({version:1,demo:false,transactions:[],tax:{taxable:null,joint:false}});
@@ -21,8 +35,10 @@ function sampleState() {
     for(const [description, category, type, amount, day] of entries) transactions.push({id:crypto.randomUUID(),description,category,type,amount,date:`${month}-${String(day).padStart(2,'0')}`});
   }
   const sample=validateState({version:1,demo:true,transactions,tax:{taxable:3600000,joint:false}});
+  sample.forecast={...sample.forecast,rows:sample.forecast.rows.map(row=>({...row,gross:0,holiday:0,christmas:0,mealDays:0}))};
   sample.accounts=[{id:'demo-bank',name:'Everyday account',bank:'Sample bank',kind:'Current',opening:100000},{id:'demo-savings',name:'A little breathing room',bank:'Sample bank',kind:'Savings',opening:450000}];
   sample.transactions=sample.transactions.map(t=>({...t,accountId:'demo-bank'}));
+  sample.expenseShortcuts=['Fuel','Groceries','Office','Tech'].map(name=>({id:crypto.randomUUID(),name,category:name,accountId:'demo-bank'}));
   sample.holdings=[{id:'demo-etf',name:'Global equity fund · sample',symbol:'DEMO',broker:'Sample broker',kind:'ETF',units:40,cost:400000,price:112.5,updated:today()}];
   return sample;
 }
@@ -120,25 +136,26 @@ function route() {
   document.querySelectorAll('nav a').forEach(node=>{node.classList.toggle('active',node.dataset.page===page); if(node.dataset.page===page) node.setAttribute('aria-current','page'); else node.removeAttribute('aria-current');});
   document.title=`${{overview:'Overview',transactions:'Transactions',accounts:'Accounts',portfolio:'Portfolio',planning:'Planning',loans:'Loans',tax:'IRS calculator',settings:'Your data'}[page]} · Conta`;
 }
-const icons={Salary:'↙','Other income':'↙',Housing:'⌂',Groceries:'▧',Transport:'↔',Dining:'♧',Shopping:'◇',Health:'＋',Leisure:'♫',Utilities:'ϟ',Other:'·'};
+const icons={Salary:'↙','Other income':'↙',Housing:'⌂',Groceries:'▧',Fuel:'⛽',Transport:'↔',Dining:'♧',Shopping:'◇',Office:'▤',Tech:'⌘',Health:'＋',Leisure:'♫',Utilities:'ϟ',Untracked:'?',Other:'·'};
+const trackedLoanBalance=()=>trackedLoanDebt(state,today());
 function sorted(transactions) {return [...transactions].sort((a,b)=>b.date.localeCompare(a.date)||b.id.localeCompare(a.id));}
 function allTransactions() {return [...state.transactions,...scheduledTransactions(state)];}
 function filtered() {const query=$('#search').value.toLowerCase(); const month=$('#transaction-month').value;const type=$('#type-filter').value;return sorted(allTransactions().filter(t=>(!month||t.date.startsWith(month))&&(type==='all'||t.type===type)&&`${t.description} ${t.category}`.toLowerCase().includes(query)));}
 function renderOverview() {
   const month=$('#overview-month').value || today().slice(0,7);
   renderCashSummary('#overview-cash',month);
-  const entries=state.transactions.filter(t=>t.date.startsWith(month));const total=totals(entries);
+  // Tiles and chart project the month: recorded plus still-scheduled salary, bills and loans.
+  const projected=allTransactions(),entries=projected.filter(t=>t.date.startsWith(month)),total=totals(entries);
   for(const key of ['balance','income','expense']) $('#'+key).textContent=money(total[key]);
-  for(const type of ['income','expense']) {const n=entries.filter(t=>t.type===type).length;$('#'+type+'-count').textContent=`${n} ${type} transaction${n===1?'':'s'}`;}
+  for(const type of ['income','expense']) {const list=entries.filter(t=>t.type===type),planned=totals(list.filter(t=>t.scheduled))[type];$('#'+type+'-count').textContent=`${money(total[type]-planned)} recorded · ${money(planned)} scheduled`;}
   const [year, mon]=month.split('-').map(Number);
-  const months=Array.from({length:6},(_,i)=>{const d=new Date(year,mon-6+i,1);const key=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;return {...totals(state.transactions.filter(t=>t.date.startsWith(key))),label:d.toLocaleDateString('en-GB',{month:'short'}),key};});
+  const months=Array.from({length:6},(_,i)=>{const d=new Date(year,mon-6+i,1);const key=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;return {...totals(projected.filter(t=>t.date.startsWith(key))),label:d.toLocaleDateString('en-GB',{month:'short'}),key};});
   const max=Math.max(10000,...months.flatMap(m=>[m.income,m.expense]));const ceiling=Math.ceil(max/10000)*10000;
   const chart=$('#cash-chart');
   chart.setAttribute('aria-label',months.map(m=>`${m.key}: income ${money(m.income)}, expenses ${money(m.expense)}`).join('; '));
   chart.innerHTML=`<div class="y-labels">${[1,.75,.5,.25,0].map(v=>`<span>${Math.round(ceiling*v/100).toLocaleString('en-GB')}</span>`).join('')}</div><div class="chart-plot">${months.map((m,i)=>`<div class="chart-group ${i===5?'current':''}" title="${m.key}: income ${money(m.income)}; expenses ${money(m.expense)}"><div class="chart-bar" style="height:${m.income/ceiling*100}%"></div><div class="chart-bar out" style="height:${m.expense/ceiling*100}%"></div><span class="chart-label">${m.label}</span></div>`).join('')}</div>`;
-  const held=portfolio(state.holdings),cashNow=[...accountBalances(state,today()).values()].reduce((sum,value)=>sum+value,0);
-  $('#assets').textContent=money(cashNow+held.value);
-  $('#assets-foot').textContent=`${state.accounts.length} account${state.accounts.length===1?'':'s'} · ${state.holdings.length} holding${state.holdings.length===1?'':'s'} · today`;
+  $('#assets').textContent=money(netWorth(state,today()).total);
+  $('#assets-foot').textContent=`Cash + holdings − ${money(trackedLoanBalance())} tracked loan debt`;
   renderExpectedMonth(month);
   const outflow=monthlyOutflows(state,month);
   const colors=['#345f43','#4f7a53','#7d9b63','#96ae72','#cfdaa7','#e3bb95','#9baeb1'];
@@ -146,7 +163,7 @@ function renderOverview() {
   const gradient=outflow.groups.map((g,i)=>{const start=angle;angle+=g.share*3.6;return `${colors[i]} ${start}deg ${i===outflow.groups.length-1?360:angle}deg`;}).join(',');
   const ringLabel=`Money out ${money(outflow.total)}. `+outflow.groups.map(g=>`${g.label} ${money(g.amount)}, ${percent(g.share)}`).join('; ');
   $('#spending').innerHTML=outflow.total?`<div class="spending-ring" role="img" aria-label="${escape(ringLabel)}" style="background:conic-gradient(${gradient})"><div class="ring-center"><span>Money out</span><strong>${money(outflow.total)}</strong></div></div><div class="spending-legend">${outflow.groups.map((g,i)=>`<div class="spending-row"><i style="background:${colors[i]}"></i><span>${escape(g.label)} · ${percent(Math.round(g.share*10)/10)}</span><strong>${money(g.amount)}</strong></div>`).join('')}</div>`:'<p class="empty">A fresh start.<br>Your spending will appear here.</p>';
-  $('#recent-list').innerHTML=sorted(entries).slice(0,4).map(t=>`<div class="recent-item"><span class="category-icon" aria-hidden="true">${icons[t.category]}</span><div><h3>${escape(t.description)}</h3><p>${escape(t.category)} · ${dateLabel(t.date)}</p></div><strong class="amount ${t.type}">${t.type==='income'?'+':'−'}${money(t.amount)}</strong></div>`).join('')||'<p class="empty">Your month starts here.<br>Add your first transaction.</p>';
+  $('#recent-list').innerHTML=sorted(entries.filter(t=>!t.scheduled)).slice(0,4).map(t=>`<div class="recent-item"><span class="category-icon" aria-hidden="true">${icons[t.category]}</span><div><h3>${escape(t.description)}</h3><p>${escape(t.category)} · ${dateLabel(t.date)}</p></div><strong class="amount ${t.type}">${t.type==='income'?'+':'−'}${money(t.amount)}</strong></div>`).join('')||'<p class="empty">Your month starts here.<br>Add your first transaction.</p>';
 }
 // The landing page must survive an unsaved or invalid salary plan.
 function renderExpectedMonth(month) {
@@ -160,14 +177,19 @@ function renderExpectedMonth(month) {
       ?`Expected salary on ${dateLabel(e.payDate)}, less this month’s monthly bills, loan instalments and investment contributions, whether recorded yet or not. Meal-card value is not spendable cash, and everyday spending is not counted here.`
       :e.nextPayDate?`No salary plan covers this month. The next planned salary is ${dateLabel(e.nextPayDate)}.`:'No salary plan covers this month. Set one in Planning to see the month ahead.';
     movements.hidden=!e.movements.length;
-    movements.innerHTML=e.movements.map(m=>`<div class="recent-item"><span class="category-icon" aria-hidden="true">${icons[m.category]||icons.Other}</span><div><h3>${escape(m.description)}</h3><p>${m.kind==='salary'?'Planned salary':'Scheduled loan payment'} · ${dateLabel(m.date)}</p></div><strong class="amount ${m.type}">${m.type==='income'?'+':'−'}${money(m.amount)}</strong></div>`).join('');
+    movements.innerHTML=e.movements.map(m=>`<div class="recent-item"><span class="category-icon" aria-hidden="true">${icons[m.category]||icons.Other}</span><div><h3>${escape(m.description)}</h3><p>${{salary:'Planned salary',loan:'Scheduled loan payment',recurring:'Scheduled bill'}[m.kind]} · ${dateLabel(m.date)}</p></div><strong class="amount ${m.type}">${m.type==='income'?'+':'−'}${money(m.amount)}</strong></div>`).join('');
   } catch(error) {
     figures.hidden=true;figures.innerHTML='';
     movements.hidden=true;movements.innerHTML='';
     note.textContent='This month cannot be projected until your salary plan is valid: '+error.message;
   }
 }
+function renderShortcuts(){
+  $('#expense-shortcuts').innerHTML=state.expenseShortcuts.map(s=>`<div class="shortcut"><button class="button secondary" data-shortcut-use="${escape(s.id)}">${icons[s.category]||icons.Other} ${escape(s.name)}</button><button class="icon-button" data-shortcut-edit="${escape(s.id)}" aria-label="Edit ${escape(s.name)} shortcut">Edit</button><button class="icon-button" data-shortcut-delete="${escape(s.id)}" aria-label="Delete ${escape(s.name)} shortcut">×</button></div>`).join('')||`<p class="muted">${state.accounts.length?'Add a shortcut for your usual expenses.':'Add an account, then make a shortcut for your usual expenses.'}</p>`;
+  $('#add-shortcut').disabled=!state.accounts.length;
+}
 function renderTransactions() {
+  renderShortcuts();
   const entries=filtered();const total=totals(entries);
   const scheduled=entries.filter(t=>t.scheduled).length;
   $('#transaction-summary').textContent=`${entries.length} transaction${entries.length===1?'':'s'} · ${entries.length-scheduled} recorded · ${scheduled} scheduled · Income ${money(total.income)} · Expenses ${money(total.expense)} · Balance ${money(total.balance)}`;
@@ -185,20 +207,64 @@ function render() {$('#demo-banner').hidden=!state.demo;renderOverview();renderT
 const form=$('#transaction-form');const dialog=$('#transaction-dialog');
 function openTransaction(id) {
   form.reset();$('#transaction-error').textContent='';const t=state.transactions.find(t=>t.id===id);
-  $('#transaction-account').innerHTML='<option value="">Unassigned</option>'+accountOptions();
+  $('#transaction-account').innerHTML='<option value="">Choose an account</option>'+accountOptions();
   $('#dialog-title').textContent=t?'Edit transaction':'Add a transaction';
   for(const [key,value] of Object.entries(t||{id:'',date:today(),category:'Other'})) if(form.elements.namedItem(key)) form.elements.namedItem(key).value=key==='amount'?(value/100).toFixed(2):value;
-  $('#repeat-label').hidden=!!t;form.elements.repeat.disabled=!!t||form.elements.type.value!=='expense';
+  if(!t) form.elements.accountId.value=sorted(state.transactions.filter(item=>item.type==='expense'&&item.accountId))[0]?.accountId||state.accounts[0]?.id||'';
+  form.elements.amount.readOnly=!!t?.loanId;
+  $('#transaction-amount-note').hidden=!t?.loanId;
+  $('#repeat-label').hidden=!!t;updateTransactionFields();
   dialog.showModal();
+}
+function updateTransactionFields() {
+  const expense=form.elements.type.value==='expense';
+  form.elements.description.required=!expense;
+  $('#transaction-description-status').textContent=expense?'Optional':'Required';
+  form.elements.accountId.required=expense&&!form.elements.id.value;
+  $('#transaction-account-status').textContent=form.elements.accountId.required?'Required':'Optional';
+  form.elements.repeat.disabled=!!form.elements.id.value||!expense;
 }
 $('#category-select').innerHTML=CATEGORIES.map(c=>`<option>${c}</option>`).join('');
 document.querySelectorAll('.add-transaction').forEach(button=>button.addEventListener('click',()=>openTransaction()));
 document.querySelectorAll('.close-dialog').forEach(button=>button.addEventListener('click',()=>dialog.close()));
-form.elements.type.addEventListener('change',()=>{form.elements.repeat.disabled=!!form.elements.id.value||form.elements.type.value!=='expense';});
+function openShortcut(shortcut){
+  const f=$('#shortcut-form');
+  f.elements.category.innerHTML=CATEGORIES.filter(c=>!['Salary','Other income'].includes(c)).map(c=>`<option>${c}</option>`).join('');
+  f.elements.accountId.innerHTML=accountOptions();
+  openRecord('shortcut-form',shortcut||{id:'',name:'',category:'Groceries',accountId:state.accounts[0]?.id});
+}
+$('#add-shortcut').addEventListener('click',()=>openShortcut());
+$('#expense-shortcuts').addEventListener('click',event=>{
+  const use=event.target.closest('[data-shortcut-use]');
+  if(use){
+    const shortcut=state.expenseShortcuts.find(s=>s.id===use.dataset.shortcutUse);
+    if(!shortcut)return;
+    openTransaction();form.elements.category.value=shortcut.category;form.elements.accountId.value=shortcut.accountId;
+    form.elements.description.value=shortcut.name===shortcut.category?'':shortcut.name;
+    form.elements.amount.focus();return;
+  }
+  const edit=event.target.closest('[data-shortcut-edit]');
+  if(edit)return openShortcut(state.expenseShortcuts.find(s=>s.id===edit.dataset.shortcutEdit));
+  const remove=event.target.closest('[data-shortcut-delete]');
+  if(remove&&confirm('Delete this expense shortcut?')&&save({...state,expenseShortcuts:state.expenseShortcuts.filter(s=>s.id!==remove.dataset.shortcutDelete)}))renderTransactions();
+});
+$('#shortcut-form').addEventListener('submit',event=>{
+  event.preventDefault();const f=event.currentTarget;
+  try{
+    const v=Object.fromEntries(new FormData(f));
+    if(v.id&&!state.expenseShortcuts.some(s=>s.id===v.id))throw new Error('This shortcut was removed in another tab.');
+    const shortcut={id:v.id||crypto.randomUUID(),name:v.name.trim(),category:v.category,accountId:v.accountId};
+    commitRecord(f,{...state,expenseShortcuts:v.id?state.expenseShortcuts.map(s=>s.id===v.id?shortcut:s):[...state.expenseShortcuts,shortcut]});
+  }catch(error){f.querySelector('.error').textContent=error.message;}
+});
+form.elements.type.addEventListener('change',updateTransactionFields);
 form.addEventListener('submit',event=>{
   event.preventDefault();try {
-    const data=Object.fromEntries(new FormData(form));const t={...state.transactions.find(old=>old.id===data.id),...data,id:data.id||crypto.randomUUID(),description:data.description.trim(),amount:cents(data.amount),accountId:data.accountId||null};
+    const data=Object.fromEntries(new FormData(form));const t={...state.transactions.find(old=>old.id===data.id),...data,id:data.id||crypto.randomUUID(),description:data.description.trim()||(data.type==='expense'?data.category:''),amount:cents(data.amount),accountId:data.accountId||null};
+    const old=state.transactions.find(item=>item.id===data.id);
+    if(old?.loanId&&t.amount!==old.amount)throw new Error('A recorded loan instalment amount cannot be edited. Update the loan from your lender balance.');
     if(!t.description) throw new Error('Please add a description.');
+    if(!data.id&&t.type==='expense'&&!t.accountId) throw new Error('Choose the account that paid this expense.');
     if(data.id&&!state.transactions.some(old=>old.id===data.id)) throw new Error('This transaction was removed in another tab. Close this form and add it again if needed.');
     if((t.recurringId||t.loanId)&&t.type!=='expense')throw new Error('A posted monthly expense must remain an expense.');
     let recurring=state.recurring;
@@ -255,13 +321,17 @@ function accountOptions(filter=()=>true) {return state.accounts.filter(filter).m
 function renderWealth() {
   const balances=accountBalances(state,today()),investments=portfolio(state.holdings);
   const cash=[...balances.values()].reduce((sum,value)=>sum+value,0);
-  $('#total-cash').textContent=money(cash);$('#account-investments').textContent=money(investments.value);$('#net-worth').textContent=money(cash+investments.value);
+  $('#total-cash').textContent=money(cash);$('#account-investments').textContent=money(investments.value);$('#net-worth').textContent=money(netWorth(state,today()).total);
   const unassigned=state.transactions.filter(t=>!t.accountId).length;
   $('#unassigned-note').textContent=unassigned?`${unassigned} transaction${unassigned===1?' is':'s are'} unassigned. Edit these transactions to link a bank account; they do not affect account balances or tracked assets.`:'Balances include assigned transactions and investment contributions through today. Future outflows are reserved in Planning.';
-  $('#account-cards').innerHTML=state.accounts.map(a=>`<article class="panel account-card"><div class="panel-heading"><span class="category-icon" aria-hidden="true">▤</span><span class="pill">${escape(a.kind)}</span></div><h2>${escape(a.name)}</h2><p class="muted">${escape(a.bank)} · EUR</p><div class="stat-number">${money(balances.get(a.id))}</div><div class="panel-heading"><small class="muted">Opening balance ${money(a.opening)}</small><div><button class="icon-button" data-account-edit="${escape(a.id)}">Edit</button><button class="icon-button" data-account-delete="${escape(a.id)}">Delete</button></div></div></article>`).join('')||'<article class="panel"><p class="empty">Add your bank account to start tracking balances.<br>No bank login or credentials needed.</p></article>';
+  const due=state.accounts.filter(a=>!a.reconciledAt||(Date.parse(today())-Date.parse(a.reconciledAt))/86400000>=7);
+  $('#balance-check-status').textContent=state.accounts.length?due.length?`${due.length} account${due.length===1?' is':'s are'} ready for a balance check: ${due.map(a=>a.name).join(', ')}.`:'All accounts checked in the last seven days.':'Add an account to start checking balances.';
+  $('#account-cards').innerHTML=state.accounts.map(a=>`<article class="panel account-card"><div class="panel-heading"><span class="category-icon" aria-hidden="true">▤</span><span class="pill">${escape(a.kind)}</span></div><h2>${escape(a.name)}</h2><p class="muted">${escape(a.bank)} · EUR</p><div class="stat-number">${money(balances.get(a.id))}</div><div class="panel-heading"><small class="muted">Checked ${a.reconciledAt?dateLabel(a.reconciledAt):'never'} · Opening ${money(a.opening)}</small><div><button class="icon-button" data-account-edit="${escape(a.id)}">Edit</button><button class="icon-button" data-account-delete="${escape(a.id)}">Delete</button></div></div><button class="button secondary" data-account-reconcile="${escape(a.id)}">Set current balance</button></article>`).join('')||'<article class="panel"><p class="empty">Add your bank account to start tracking balances.<br>No bank login or credentials needed.</p></article>';
   $('#add-transfer').disabled=state.accounts.length<2;
   $('#transfer-empty').hidden=state.transfers.length>0;
   $('#transfer-rows').innerHTML=sorted(state.transfers).map(t=>`<tr><td>${dateLabel(t.date)}</td><td>${escape(accountName(t.from))}</td><td>${escape(accountName(t.to))}</td><td class="right">${money(t.amount)}</td><td><button class="icon-button" data-transfer-delete="${escape(t.id)}" aria-label="Delete transfer on ${escape(t.date)}">Delete</button></td></tr>`).join('');
+  const oldValues=state.holdings.filter(h=>Date.parse(today())-Date.parse(h.updated)>30*86400000);
+  $('#valuation-stale-note').textContent=oldValues.length?`${oldValues.length} holding valuation${oldValues.length===1?' is':'s are'} over 30 days old: ${oldValues.map(h=>h.name).join(', ')}. Update before relying on net worth.`:state.holdings.length?'Holding valuations are current within 30 days.':'Add a holding to track its valuation.';
   $('#portfolio-value').textContent=money(investments.value);$('#portfolio-cost').textContent=money(investments.cost);$('#portfolio-gain').textContent=(investments.gain>0?'+':'')+money(investments.gain);
   $('#portfolio-gain').className='stat-number '+(investments.gain<0?'negative':'positive');
   $('#portfolio-return').textContent=investments.returnPct===null?'Add cost basis to calculate a return':percent(investments.returnPct)+' on remaining cost basis';
@@ -274,12 +344,13 @@ function renderWealth() {
   const allocations=ASSET_TYPES.map(kind=>({kind,value:investments.positions.filter(h=>h.kind===kind).reduce((sum,h)=>sum+h.value,0)})).filter(a=>a.value>0);
   $('#allocation').innerHTML=allocations.map((a,i)=>`<div class="allocation-row"><div><span>${a.kind}</span><strong>${percent(a.value/investments.value*100)}</strong></div><div class="allocation-track"><div style="width:${a.value/investments.value*100}%;background:${colors[i]}"></div></div><small>${money(a.value)}</small></div>`).join('')||'<p class="empty">Your asset mix will appear here.</p>';
   const history=[...state.snapshots].sort((a,b)=>a.date.localeCompare(b.date));
-  $('#snapshot-rows').innerHTML=[...history].reverse().map(s=>`<tr><td>${dateLabel(s.date)}</td><td>${money(s.cash)}</td><td>${money(s.investments)}</td><td>${money(s.cash+s.investments)}</td><td><button class="icon-button" data-snapshot-delete="${s.date}">Delete</button></td></tr>`).join('');
-  if(history.length<2) $('#wealth-chart').innerHTML=`<div class="empty snapshot-empty"><span class="little-spark" aria-hidden="true">✳</span><p>${history.length?'Your first snapshot is saved. Save on another day to see your progress.':'Start your timeline. Save today’s cash and portfolio values.'}</p><strong>Today: ${money(cash+investments.value)}</strong></div>`;
+  const worthHistory=history.filter(s=>s.debts!==undefined);
+  $('#snapshot-rows').innerHTML=[...history].reverse().map(s=>`<tr><td>${dateLabel(s.date)}</td><td>${money(s.cash)}</td><td>${money(s.investments)}</td><td>${s.debts===undefined?'—':money(s.debts)}</td><td>${s.debts===undefined?'Assets only: '+money(s.cash+s.investments):money(s.cash+s.investments-s.debts)}</td><td><button class="icon-button" data-snapshot-delete="${s.date}">Delete</button></td></tr>`).join('');
+  if(worthHistory.length<2) $('#wealth-chart').innerHTML=`<div class="empty snapshot-empty"><span class="little-spark" aria-hidden="true">✳</span><p>${worthHistory.length?'Your first net worth snapshot is saved. Save on another day to see your progress.':'Start your timeline. Save today’s financial net worth.'}</p><strong>Today: ${money(netWorth(state,today()).total)}</strong></div>`;
   else {
-    const values=history.map(s=>s.cash+s.investments),low=Math.min(...values),high=Math.max(...values),span=Math.max(100,high-low);
-    const points=history.map((s,i)=>[55+i/(history.length-1)*470,20+(high-values[i])/span*130]);
-    $('#wealth-chart').innerHTML=`<svg class="wealth-svg" viewBox="0 0 560 195" role="img" aria-label="Tracked assets from ${dateLabel(history[0].date)} to ${dateLabel(history.at(-1).date)}, ending at ${money(values.at(-1))}"><line x1="55" x2="530" y1="20" y2="20" stroke="#e6eadf"/><line x1="55" x2="530" y1="150" y2="150" stroke="#e6eadf"/><text x="0" y="24">${Math.round(high/100).toLocaleString('en-GB')} €</text><text x="0" y="154">${Math.round(low/100).toLocaleString('en-GB')} €</text><polyline points="${points.map(p=>p.join(',')).join(' ')}" fill="none" stroke="#345f43" stroke-width="3"/>${points.map(([x,y],i)=>`<circle cx="${x}" cy="${y}" r="4" fill="#345f43"><title>${dateLabel(history[i].date)}: ${money(values[i])}</title></circle>`).join('')}<text x="55" y="184">${dateLabel(history[0].date)}</text><text x="460" y="184">${dateLabel(history.at(-1).date)}</text></svg>`;
+    const values=worthHistory.map(s=>s.cash+s.investments-s.debts),low=Math.min(...values),high=Math.max(...values),span=Math.max(100,high-low);
+    const points=worthHistory.map((s,i)=>[55+i/(worthHistory.length-1)*470,20+(high-values[i])/span*130]);
+    $('#wealth-chart').innerHTML=`<svg class="wealth-svg" viewBox="0 0 560 195" role="img" aria-label="Financial net worth from ${dateLabel(worthHistory[0].date)} to ${dateLabel(worthHistory.at(-1).date)}, ending at ${money(values.at(-1))}"><line x1="55" x2="530" y1="20" y2="20" stroke="#e6eadf"/><line x1="55" x2="530" y1="150" y2="150" stroke="#e6eadf"/><text x="0" y="24">${Math.round(high/100).toLocaleString('en-GB')} €</text><text x="0" y="154">${Math.round(low/100).toLocaleString('en-GB')} €</text><polyline points="${points.map(p=>p.join(',')).join(' ')}" fill="none" stroke="#345f43" stroke-width="3"/>${points.map(([x,y],i)=>`<circle cx="${x}" cy="${y}" r="4" fill="#345f43"><title>${dateLabel(worthHistory[i].date)}: ${money(values[i])}</title></circle>`).join('')}<text x="55" y="184">${dateLabel(worthHistory[0].date)}</text><text x="460" y="184">${dateLabel(worthHistory.at(-1).date)}</text></svg>`;
   }
 }
 function openRecord(formId,values) {
@@ -298,16 +369,50 @@ $('#add-account').addEventListener('click',()=>openRecord('account-form',{id:'',
 $('#account-form').addEventListener('submit',event=>{
   event.preventDefault();const f=event.currentTarget;
   try {const v=Object.fromEntries(new FormData(f));const opening=cents(v.opening.replace(/^-/,'').trim())*(v.opening.startsWith('-')?-1:1);
-    const account={...v,id:v.id||crypto.randomUUID(),name:v.name.trim(),bank:v.bank.trim(),opening};
+    const account={...state.accounts.find(a=>a.id===v.id),...v,id:v.id||crypto.randomUUID(),name:v.name.trim(),bank:v.bank.trim(),opening};
     if(v.id&&!state.accounts.some(a=>a.id===v.id))throw new Error('This account was removed in another tab.');
-    commitRecord(f,{...state,accounts:v.id?state.accounts.map(a=>a.id===v.id?account:a):[...state.accounts,account]});
+    const expenseShortcuts=state.accounts.length||v.id?state.expenseShortcuts:['Fuel','Groceries','Office','Tech'].map(name=>({id:crypto.randomUUID(),name,category:name,accountId:account.id}));
+    commitRecord(f,{...state,expenseShortcuts,accounts:v.id?state.accounts.map(a=>a.id===v.id?account:a):[...state.accounts,account]});
   }catch(error){f.querySelector('.error').textContent=error.message;}
 });
 $('#account-cards').addEventListener('click',event=>{
+  const reconcile=event.target.closest('[data-account-reconcile]');
+  if(reconcile){
+    const id=reconcile.dataset.accountReconcile,a=state.accounts.find(a=>a.id===id),f=$('#reconcile-form');
+    if(!a)return;
+    f.reset();f.querySelector('.error').textContent='';f.elements.accountId.value=id;
+    $('#reconcile-note').textContent=`${a.name} is currently tracked at ${money(accountBalances(state,today()).get(id))}. Enter the balance your bank shows today.`;
+    $('#reconcile-preview').textContent='Enter the bank balance to preview the difference.';
+    f.closest('dialog').showModal();return;
+  }
   const edit=event.target.closest('[data-account-edit]');if(edit){const a=state.accounts.find(a=>a.id===edit.dataset.accountEdit);return openRecord('account-form',{...a,opening:(a.opening/100).toFixed(2)});}
   const remove=event.target.closest('[data-account-delete]');if(!remove)return;const id=remove.dataset.accountDelete;
-  if(state.transactions.some(t=>t.accountId===id)||state.transfers.some(t=>t.from===id||t.to===id)||state.recurring.some(r=>r.accountId===id)||state.loans.some(l=>l.accountId===id)||state.investmentPlans.some(p=>p.accountId===id)||state.contributions.some(c=>c.accountId===id)||[state.payroll.bankAccountId,state.payroll.mealAccountId].includes(id))return toast('Reassign this account’s transactions, salary, investments, loans and monthly expenses, and remove its transfers before deleting it.');
+  if(state.transactions.some(t=>t.accountId===id)||state.transfers.some(t=>t.from===id||t.to===id)||state.recurring.some(r=>r.accountId===id)||state.loans.some(l=>l.accountId===id)||state.investmentPlans.some(p=>p.accountId===id)||state.contributions.some(c=>c.accountId===id)||state.expenseShortcuts.some(s=>s.accountId===id)||[state.payroll.bankAccountId,state.payroll.mealAccountId].includes(id))return toast('Reassign this account’s transactions, shortcuts, salary, investments, loans and monthly expenses, and remove its transfers before deleting it.');
   if(confirm('Delete this account and its opening balance?')&&save({...state,accounts:state.accounts.filter(a=>a.id!==id)}))render();
+});
+$('#reconcile-form').addEventListener('submit',event=>{
+  event.preventDefault();const f=event.currentTarget;
+  try{
+    const id=f.elements.accountId.value;
+    if(!state.accounts.some(a=>a.id===id))throw new Error('This account was removed in another tab.');
+    const value=f.elements.balance.value,actual=cents(value.replace(/^-/,'').trim())*(value.startsWith('-')?-1:1);
+    const difference=actual-accountBalances(state,today()).get(id);
+    const accounts=state.accounts.map(a=>a.id===id?{...a,reconciledAt:today()}:a);
+    if(!difference){commitRecord(f,{...state,accounts});toast('Balance matched and check date saved.');return;}
+    const expense=difference<0;
+    const transaction={id:crypto.randomUUID(),description:expense?'Untracked spending':'Balance adjustment',type:expense?'expense':'income',category:expense?'Untracked':'Other income',amount:Math.abs(difference),date:today(),accountId:id};
+    commitRecord(f,{...state,accounts,transactions:[...state.transactions,transaction]});
+  }catch(error){f.querySelector('.error').textContent=error.message;}
+});
+$('#reconcile-form').elements.balance.addEventListener('input',event=>{
+  const input=event.currentTarget,note=$('#reconcile-preview');
+  if(!input.value||!input.validity.valid){note.textContent='Enter a valid bank balance to preview the difference.';return;}
+  try{
+    const id=$('#reconcile-form').elements.accountId.value;
+    const bank=cents(input.value.replace(/^-/,'').trim())*(input.value.startsWith('-')?-1:1);
+    const tracked=accountBalances(state,today()).get(id),difference=bank-tracked;
+    note.textContent=`Conta ${money(tracked)} → bank ${money(bank)}. ${difference<0?`Untracked spending ${money(-difference)}`:difference>0?`Balance adjustment ${money(difference)}`:'Balances match; this will update the check date.'}.`;
+  }catch{note.textContent='Enter a valid bank balance to preview the difference.';}
 });
 $('#add-transfer').addEventListener('click',()=>{
   const f=$('#transfer-form');f.elements.from.innerHTML=accountOptions();f.elements.to.innerHTML=accountOptions();
@@ -336,7 +441,7 @@ $('#holding-rows').addEventListener('click',event=>{
 $('#save-snapshot').addEventListener('click',()=>{
   if(state.snapshots.some(s=>s.date===today())&&!confirm('Replace today’s saved valuation with the current values?'))return;
   const p=portfolio(state.holdings);const cash=[...accountBalances(state,today()).values()].reduce((s,v)=>s+v,0);
-  if(save({...state,snapshots:[...state.snapshots.filter(s=>s.date!==today()),{date:today(),cash,investments:p.value,cost:p.cost}]})){renderWealth();toast('Today’s valuation is saved.');}
+  if(save({...state,snapshots:[...state.snapshots.filter(s=>s.date!==today()),{date:today(),cash,investments:p.value,cost:p.cost,debts:trackedLoanDebt(state,today())}]})){renderWealth();toast('Today’s valuation is saved.');}
 });
 $('#snapshot-rows').addEventListener('click',event=>{const b=event.target.closest('[data-snapshot-delete]');if(b&&confirm('Delete this historical valuation?')&&save({...state,snapshots:state.snapshots.filter(s=>s.date!==b.dataset.snapshotDelete)}))renderWealth();});
 $('#export-holdings').addEventListener('click',()=>{
@@ -416,6 +521,7 @@ payrollForm.addEventListener('submit',event=>{
 const eurInput=value=>(value/100).toFixed(2);
 function renderPlanning(){
   const p=state.payroll;
+  $('#cash-buffer-form').elements.buffer.value=eurInput(state.cashBuffer);
   $('#forecast-heading').textContent=`Your salary plan · ${state.forecast.start.slice(0,4)}`;
   $('#forecast-start').value=state.forecast.start;$('#forecast-end').value=state.forecast.end;$('#forecast-payday').value=state.forecast.payDay;
   $('#forecast-profile').textContent=`${p.payments} payments · ${p.youth&&p.employerApplied?'IRS Jovem applied by employer':'Ordinary withholding'} · ${money(p.mealDaily)} per meal day · ${p.mealMethod==='card'?'Meal card':'Cash meals'}. Tax settings apply to all months below.`;
@@ -440,8 +546,15 @@ function renderForecastResults(){
 }
 function renderCashSummary(target,month){
   const plan=cashPlan(state,month,today());
-  $(target).innerHTML=[['Recorded cash',plan.cash],['Reserved payments',plan.reserved],['Available cash',plan.available]].map(([label,value])=>`<div><span>${label}</span><strong class="${value<0?'negative':''}">${money(value)}</strong></div>`).join('');
+  $(target).classList.add('four');
+  $(target).innerHTML=[['Recorded cash',plan.cash],['Reserved payments',plan.reserved],['Available cash',plan.available],['Safe to spend',plan.safeToSpend]].map(([label,value])=>`<div><span>${label}</span><strong class="${value<0?'negative':''}">${money(value)}</strong></div>`).join('');
 }
+$('#cash-buffer-form').addEventListener('submit',event=>{
+  event.preventDefault();const f=event.currentTarget;
+  f.querySelector('.error').textContent='';
+  try{if(save({...state,cashBuffer:cents(f.elements.buffer.value)})){renderOverview();renderPaymentPlan();toast('Cash buffer saved.');}}
+  catch(error){f.querySelector('.error').textContent=error.message;}
+});
 function renderPaymentPlan(){
   const month=$('#budget-month').value||today().slice(0,7),plan=cashPlan(state,month,today());
   renderCashSummary('#planning-cash',month);
@@ -520,7 +633,7 @@ function renderLoans(){
   $('#selected-loan').innerHTML=state.loans.map(l=>`<option value="${escape(l.id)}">${escape(l.name)}</option>`).join('');
   if(state.loans.some(l=>l.id===selected))$('#selected-loan').value=selected;
   $('#loan-simulator').hidden=!state.loans.length;
-  $('#loan-cards').innerHTML=state.loans.map(l=>`<article class="panel account-card"><div class="panel-heading"><span class="pill">${LOAN_KINDS[l.kind]}</span><span class="muted">${l.tracked?'In monthly plan':'Simulation only'}</span></div><h2>${escape(l.name)}</h2><div class="stat-number">${money(l.balance)}</div><small class="muted">Principal at start of schedule · ${l.posted.length} payment(s) recorded</small><p class="muted">${dateLabel(l.start)} – ${dateLabel(l.end)} · ${termLabel(l.months)} · ${l.months} payments on day ${l.paymentDay} · ${escape(accountName(l.accountId))}<br>TAN ${rate(l.tan)}${rateSource(l)} · TAEG ${l.taeg===null?'not entered':rate(l.taeg)}</p><div class="button-row"><button class="button secondary" data-loan-explore="${escape(l.id)}">Explore</button><button class="icon-button" data-loan-edit="${escape(l.id)}">Edit</button><button class="icon-button" data-loan-delete="${escape(l.id)}">Delete</button></div></article>`).join('')||'<article class="panel"><p class="empty">Add your car, home or personal loan.<br>Start with the remaining balance and term from your lender.</p></article>';
+  $('#loan-cards').innerHTML=state.loans.map(l=>`<article class="panel account-card"><div class="panel-heading"><span class="pill">${LOAN_KINDS[l.kind]}</span><span class="muted">${l.tracked?'In monthly plan':'Simulation only'}</span></div><h2>${escape(l.name)}</h2><div class="stat-number">${money(loanOutstanding(state,l,today()))}</div><small class="muted">Outstanding principal · ${l.posted.length} payment(s) recorded · Start ${money(l.balance)}</small><p class="muted">${dateLabel(l.start)} – ${dateLabel(l.end)} · ${termLabel(l.months)} · ${l.months} payments on day ${l.paymentDay} · ${escape(accountName(l.accountId))}<br>TAN ${rate(l.tan)}${rateSource(l)} · TAEG ${l.taeg===null?'not entered':rate(l.taeg)}</p><div class="button-row"><button class="button secondary" data-loan-explore="${escape(l.id)}">Explore</button><button class="icon-button" data-loan-edit="${escape(l.id)}">Edit</button><button class="icon-button" data-loan-delete="${escape(l.id)}">Delete</button></div></article>`).join('')||'<article class="panel"><p class="empty">Add your car, home or personal loan.<br>Start with the remaining balance and term from your lender.</p></article>';
   updateLoanSimulation();
 }
 const rateSource=l=>l.indexRate!==null&&l.spread!==null?` (index ${rate(l.indexRate)} + spread ${rate(l.spread)})`:'';
@@ -681,4 +794,86 @@ $('#contribution-rows').addEventListener('click',event=>{
 
 render();
 refreshPrices();
-if(storageBlocked)toast('Saved data is unreadable or storage is unavailable. Existing storage has not been overwritten. Check Your data before continuing.',true);
+// PDF extraction and merchant suggestions are local; reviewed rows use the ordinary save path.
+let statementText='',statementRows=[],statementBusy=false;
+const statementForm=$('#statement-form');
+const statementDisplayDate=value=>value?value.split('-').reverse().join('/'):' ';
+const statementISODate=value=>{const m=/^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value.trim());if(!m)return null;const [,d,month,y]=m,iso=`${y}-${month}-${d}`,check=new Date(iso+'T12:00:00Z');return Number.isFinite(check.getTime())&&check.toISOString().slice(0,10)===iso&&iso>='1900-01-01'&&iso<='2100-12-31'?iso:null;};
+function renderStatementPreview() {
+  $('#statement-preview').hidden=!statementRows.length;
+  $('#statement-save').disabled=statementBusy||!statementRows.length;
+  $('#statement-rows').innerHTML=statementRows.map((r,i)=>`<tr data-statement-row="${i}"><td><input type="checkbox" data-field="selected" aria-label="Import row ${i+1}" ${r.selected?'checked':''} ${r.exactDuplicate?'disabled':''}></td><td><input type="text" inputmode="numeric" placeholder="dd/mm/yyyy" data-field="dateInput" aria-label="Date for row ${i+1}" pattern="\\d{2}/\\d{2}/\\d{4}" value="${escape(r.dateInput??statementDisplayDate(r.date))}"></td><td><input data-field="description" aria-label="Description for row ${i+1}" maxlength="120" value="${escape(r.description||'')}"><small class="cell-note">${escape(r.exactDuplicate?'Already imported':r.possibleDuplicates?.length?'Possible existing transaction — review before selecting':(r.issues||[]).join(' · '))}</small><details><summary>PDF line</summary><small>${escape(r.raw||'Manually added')}</small></details></td><td><select data-field="type" aria-label="Direction for row ${i+1}"><option value="">Choose</option><option value="expense" ${r.type==='expense'?'selected':''}>Expense</option><option value="income" ${r.type==='income'?'selected':''}>Income</option></select></td><td><input type="number" data-field="amountInput" aria-label="Amount for row ${i+1}" min="0.01" max="1000000000" step="0.01" value="${escape(r.amountInput||'')}"></td><td><select data-field="category" aria-label="Category for row ${i+1}">${CATEGORIES.map(c=>`<option ${r.category===c?'selected':''}>${c}</option>`).join('')}</select></td><td><input type="checkbox" data-field="remember" aria-label="Remember merchant for row ${i+1}" ${r.remember?'checked':''}></td></tr>`).join('');
+}
+$('#import-pdf').addEventListener('click',()=>{
+  if(statementBusy)return;
+  statementForm.reset();statementText='';statementRows=[];
+  $('#statement-account').innerHTML='<option value="">Choose an account</option>'+accountOptions();
+  if(state.accounts.length===1)statementForm.elements.accountId.value=state.accounts[0].id;
+  $('#statement-error').textContent='';$('#statement-status').textContent='';
+  $('#statement-source').hidden=true;$('#statement-add-row').hidden=true;renderStatementPreview();
+  $('#statement-dialog').showModal();
+});
+$('#statement-read').addEventListener('click',async()=>{
+  if(statementBusy)return;
+  const file=$('#statement-file').files[0],accountId=statementForm.elements.accountId.value;
+  $('#statement-error').textContent='';
+  if(!file||!accountId){$('#statement-error').textContent='Choose an account and a PDF first.';return;}
+  if(file.size>10*1024*1024){$('#statement-error').textContent='Choose a PDF smaller than 10 MB.';return;}
+  const year=statementForm.elements.year.value;
+  if(year&&(!Number.isInteger(Number(year))||Number(year)<1900||Number(year)>2100)){$('#statement-error').textContent='Enter the year printed on the statement.';return;}
+  statementBusy=true;$('#statement-read').disabled=true;$('#statement-save').disabled=true;
+  for(const input of [statementForm.elements.accountId,statementForm.elements.year,$('#statement-file')])input.disabled=true;
+  $('#statement-status').textContent='Reading PDF locally…';
+  try{
+    const response=await fetch('/pdf-text',{method:'POST',headers:{'Content-Type':'application/pdf'},body:file});
+    const result=await response.json().catch(()=>{throw new Error('The PDF reader is unavailable. Restart Conta and try again.');});
+    if(!response.ok)throw new Error(result.error||'Could not read this PDF.');
+    statementText=result.text;
+    const parsed=parseStatement(statementText,year?{year:Number(year)}:{});
+    if(parsed.rows.length>1000)throw new Error('This statement has more than 1,000 candidate rows. Import a shorter statement.');
+    const identified=await identifyImportRows(statementText,parsed.rows,state.transactions,accountId);
+    statementRows=identified.map(r=>({...r,amountInput:Number.isSafeInteger(r.amount)?(r.amount/100).toFixed(2):'',category:suggestCategory(r.description,state.merchantRules)||(r.type==='income'?'Other income':'Other'),selected:!r.exactDuplicate&&!r.possibleDuplicates?.length&&!r.issues?.length,remember:false}));
+    $('#statement-text').textContent=statementText;
+    $('#statement-unparsed').textContent=`${parsed.unparsed.length} lines were not parsed as transactions. Check the extracted text for missing entries; add or correct rows before importing.`;
+    $('#statement-source').hidden=false;$('#statement-add-row').hidden=false;
+    $('#statement-status').textContent=`${statementRows.length} candidate rows. Unsure rows and possible duplicates start unchecked. Nothing has been saved.`;
+  }catch(error){statementRows=[];$('#statement-status').textContent='';$('#statement-error').textContent=error.message;}
+  finally{statementBusy=false;$('#statement-read').disabled=false;for(const input of [statementForm.elements.accountId,statementForm.elements.year,$('#statement-file')])input.disabled=false;renderStatementPreview();}
+});
+$('#statement-rows').addEventListener('input',event=>{
+  const field=event.target.dataset.field,index=event.target.closest('[data-statement-row]')?.dataset.statementRow;
+  if(!field||index===undefined)return;
+  statementRows[Number(index)][field]=event.target.type==='checkbox'?event.target.checked:event.target.value;
+});
+$('#statement-add-row').addEventListener('click',()=>{
+  if(statementRows.length>=1000)return;
+  statementRows.push({lineNumber:0,raw:'',date:'',description:'',type:'',amount:null,amountInput:'',category:'Other',issues:[],selected:true,remember:false});renderStatementPreview();
+});
+statementForm.addEventListener('submit',async event=>{
+  event.preventDefault();if(statementBusy)return;$('#statement-error').textContent='';
+  statementBusy=true;$('#statement-save').disabled=true;
+  try{
+    const accountId=statementForm.elements.accountId.value,previous=state;
+    if(!state.accounts.some(a=>a.id===accountId))throw new Error('Choose an existing paying account.');
+    const drafts=statementRows.map(r=>({...r,date:r.dateInput===undefined?r.date:statementISODate(r.dateInput),amount:r.selected?cents(r.amountInput):r.amount}));
+    for(const [i,r] of drafts.entries())if(r.selected&&(!r.date||!r.description.trim()||!['expense','income'].includes(r.type)||!r.amount))throw new Error(`Complete the date, description, direction and amount on row ${i+1}.`);
+    const identified=await identifyImportRows(statementText,drafts,state.transactions,accountId);
+    if(!$('#statement-dialog').open)return;
+    if(previous!==state)throw new Error('The workspace changed while reviewing. Read the PDF again before importing.');
+    const selected=identified.filter(r=>r.selected);
+    if(!selected.length)throw new Error('Select at least one completed row.');
+    if(selected.some(r=>r.exactDuplicate))throw new Error('A selected row has already been imported. Uncheck it before saving.');
+    const matches=selected.filter(r=>r.possibleDuplicates?.length).length;
+    if(matches&&!confirm(`${matches} selected row(s) match an existing date, amount and direction in this account. Import them as additional transactions?`))return;
+    let merchantRules=state.merchantRules;
+    const transactions=selected.map(r=>{
+      if(r.remember)merchantRules=rememberMerchant(merchantRules,r.description,r.category);
+      return {id:crypto.randomUUID(),date:r.date,description:r.description.trim(),type:r.type,category:r.category,amount:r.amount,accountId,...(r.raw?{importSource:r.importSource,importKey:r.importKey}:{})};
+    });
+    if(!save({...state,transactions:[...state.transactions,...transactions],merchantRules}))throw new Error('Could not save the import. Check the save warning.');
+    $('#statement-dialog').close();render();toast(`${transactions.length} statement transaction(s) imported.`);
+  }catch(error){$('#statement-error').textContent=error.message;}
+  finally{statementBusy=false;$('#statement-save').disabled=!statementRows.length;}
+});
+
+for(const input of [statementForm.elements.accountId,statementForm.elements.year,$('#statement-file')])input.addEventListener('change',()=>{statementText='';statementRows=[];$('#statement-source').hidden=true;$('#statement-add-row').hidden=true;$('#statement-status').textContent='Read the PDF to refresh the preview.';renderStatementPreview();});

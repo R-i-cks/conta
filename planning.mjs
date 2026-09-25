@@ -18,7 +18,7 @@ export function pendingPayments(state,through) {
     if(!l.tracked)continue;
     for(const row of amortize(l).rows){
       const date=dueDate(row.month,l.paymentDay);
-      if(row.period>0&&date<=through&&!l.posted.includes(row.month))payments.push({kind:'loan',sourceId:l.id,month:row.month,date,description:l.name,category:l.kind==='mortgage'?'Housing':l.kind==='car'?'Transport':'Other',amount:row.total,accountId:l.accountId});
+      if(row.period>0&&date<=through&&!l.posted.includes(row.month))payments.push({kind:'loan',sourceId:l.id,month:row.month,date,description:l.name,category:l.kind==='mortgage'?'Housing':l.kind==='car'?'Transport':'Other',amount:row.total,principal:row.principal,accountId:l.accountId});
     }
   }
   for(const p of state.investmentPlans||[])for(const o of dueOccurrences(p,through))payments.push({...o,kind:'investment',sourceId:p.id,description:state.holdings.find(h=>h.id===p.holdingId)?.name||'Investment contribution',amount:p.amount,accountId:p.accountId});
@@ -26,7 +26,7 @@ export function pendingPayments(state,through) {
 }
 export function postDueExpenses(state,through,idFactory,selection=null) {
   const due=pendingPayments(state,through).filter(p=>p.kind!=='investment').filter(p=>!selection||(p.kind===selection.kind&&p.sourceId===selection.sourceId&&p.month===selection.month));
-  const transactions=[...state.transactions,...due.map(p=>({id:idFactory(),date:p.date,description:p.description,category:p.category,type:'expense',amount:p.amount,accountId:p.accountId,[p.kind==='loan'?'loanId':'recurringId']:p.sourceId,occurrence:p.month}))];
+  const transactions=[...state.transactions,...due.map(p=>({id:idFactory(),date:p.date,description:p.description,category:p.category,type:'expense',amount:p.amount,accountId:p.accountId,[p.kind==='loan'?'loanId':'recurringId']:p.sourceId,occurrence:p.month,...(p.kind==='loan'?{loanPrincipal:p.principal}:{})}))];
   const update=(items,kind)=>items.map(r=>({...r,posted:[...(r.posted||[]),...due.filter(p=>p.kind===kind&&p.sourceId===r.id).map(p=>p.month)]}));
   return {...state,transactions,recurring:update(state.recurring,'recurring'),loans:update(state.loans,'loan')};
 }
@@ -50,8 +50,10 @@ export function scheduledTransactions(state) {
     ...(row.mealCard?[{id:`scheduled-salary-meal-${row.month}`,date:row.payDate,description:'Meal allowance',category:'Salary',type:'income',amount:row.mealCard,accountId:state.payroll.mealAccountId,kind:'salary',scheduled:true}]:[]),
   ]);
   const end=state.loans.reduce((latest,loan)=>loan.tracked&&loan.end>latest?loan.end:latest,state.forecast.end);
-  const loans=pendingPayments(state,end).filter(p=>p.kind==='loan').map(p=>({id:`scheduled-loan-${p.sourceId}-${p.month}`,date:p.date,description:p.description,category:p.category,type:'expense',amount:p.amount,accountId:p.accountId,kind:'loan',scheduled:true}));
-  return [...salary,...loans].sort((a,b)=>a.date.localeCompare(b.date)||a.description.localeCompare(b.description));
+  // Investment plans stay out: recorded contributions are not transactions, so
+  // counting them here would make money out drop once one is recorded.
+  const payments=pendingPayments(state,end).filter(p=>p.kind!=='investment').map(p=>({id:`scheduled-${p.kind}-${p.sourceId}-${p.month}`,date:p.date,description:p.description,category:p.category,type:'expense',amount:p.amount,accountId:p.accountId,kind:p.kind,scheduled:true}));
+  return [...salary,...payments].sort((a,b)=>a.date.localeCompare(b.date)||a.description.localeCompare(b.description));
 }
 export function cashPlan(state,month,asOf) {
   const end=dueDate(month,31),through=asOf<end?asOf:end;
@@ -62,7 +64,8 @@ export function cashPlan(state,month,asOf) {
   const recorded=state.transactions.filter(t=>t.type==='expense'&&t.date<=end&&((t.accountId&&t.date>through)||(!t.accountId&&(t.loanId||t.recurringId))));
   const contributions=(state.contributions||[]).filter(c=>c.date<=end&&(!c.accountId||c.date>through));
   const reserved=contributions.reduce((sum,c)=>sum+c.amount,0)+pending.reduce((sum,p)=>sum+p.amount,0)+recorded.reduce((sum,t)=>sum+t.amount,0);
-  return {cash,reserved,available:cash-reserved,pending,through,end};
+  const available=cash-reserved,buffer=state.cashBuffer||0;
+  return {cash,reserved,available,buffer,safeToSpend:available-buffer,pending,through,end};
 }
 // A plan covers one calendar year, from the payroll month to that December.
 const daysInMonth=month=>new Date(Number(month.slice(0,4)),Number(month.slice(5)),0).getDate();

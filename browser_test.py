@@ -71,6 +71,15 @@ with sync_playwright() as p:
     expect(page.locator("#demo-banner")).to_be_hidden()
     expect(page.locator("#recent-list .recent-item")).to_have_count(0)
 
+    page.locator('nav a[href="#accounts"]').click()
+    page.locator("#add-account").click()
+    account = page.locator("#account-form")
+    account.locator('[name="name"]').fill("Test current")
+    account.locator('[name="bank"]').fill("Test bank")
+    account.locator('[name="opening"]').fill("0")
+    account.get_by_role("button", name="Save account").click()
+    page.locator('nav a[href="#overview"]').click()
+
     def add(description, amount, kind, category):
         page.locator("#overview .add-transaction").click()
         form = page.locator("#transaction-form")
@@ -78,18 +87,19 @@ with sync_playwright() as p:
         form.locator('[name="amount"]').fill(amount)
         form.locator('[name="type"]').select_option(kind)
         form.locator('[name="category"]').select_option(category)
+        form.locator('[name="accountId"]').select_option(label="Test current")
         form.get_by_role("button", name="Save transaction").click()
         expect(page.locator("#transaction-dialog")).not_to_be_visible()
 
     add("Salary test", "2500.29", "income", "Salary")
     add('<img src=x onerror="alert(1)">', "100.01", "expense", "Groceries")
     assert page.locator("#recent-list img").count() == 0
-    expect(page.locator("#balance")).to_contain_text("400,28")
+    expect(page.locator("#balance")).to_contain_text("3466,48")
     expect(page.locator("#transaction-rows tr").first).to_contain_text(re.compile(r"\d{2}/\d{2}/\d{4}"))
     expect(page.locator("#spending .ring-center strong")).to_contain_text("100,01")
     expect(page.locator("#spending .spending-row")).to_have_count(1)
     expect(page.locator("#spending .spending-row")).to_contain_text("Groceries")
-    expect(page.locator("#assets")).to_contain_text("0,00")
+    expect(page.locator("#assets")).to_contain_text("2400,28")
     page.reload()
     expect(page.locator("#recent-list .recent-item")).to_have_count(2)
     page.locator('nav a[href="#transactions"]').click()
@@ -132,18 +142,19 @@ with sync_playwright() as p:
         account.locator('[name="bank"]').fill("Test bank")
         account.locator('[name="opening"]').fill(opening)
         account.get_by_role("button", name="Save account").click()
-    expect(page.locator("#account-cards .account-card")).to_have_count(2)
+    expect(page.locator("#account-cards .account-card")).to_have_count(3)
+    cash_before_transfer = page.locator("#total-cash").inner_text()
     page.locator("#add-transfer").click()
     page.locator('#transfer-form [name="amount"]').fill("200")
     page.locator("#transfer-form").get_by_role("button", name="Save transfer").click()
     expect(page.locator("#transfer-rows tr")).to_have_count(1)
-    expect(page.locator("#total-cash")).to_contain_text("500,00")
+    expect(page.locator("#total-cash")).to_have_text(cash_before_transfer)
     page.locator('nav a[href="#transactions"]').click()
     page.get_by_role("button", name="Edit Salary test", exact=True).click()
     page.locator("#transaction-account").select_option(label="Everyday")
     page.locator("#transaction-form").get_by_role("button", name="Save transaction").click()
     page.locator('nav a[href="#accounts"]').click()
-    expect(page.locator("#total-cash")).to_contain_text("500,29")
+    expect(page.locator("#total-cash")).to_contain_text("4400,28")
 
     page.locator('nav a[href="#portfolio"]').click()
     page.route("**/quotes?**", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"quotes":{"TEST":{"price":125,"currency":"EUR","date":date.today().isoformat()}},"errors":{}})))
@@ -215,7 +226,7 @@ with sync_playwright() as p:
         page.locator("#backup").click()
     backup = Path(download_info.value.path()).read_bytes()
     assert len(json.loads(backup)["transactions"]) == 2
-    assert len(json.loads(backup)["accounts"]) == 4
+    assert len(json.loads(backup)["accounts"]) == 5
     assert len(json.loads(backup)["holdings"]) == 1
     page.locator("#clear-data").click()
     page.locator("#restore").set_input_files({"name": "backup.json", "mimeType": "application/json", "buffer": backup})
@@ -277,7 +288,7 @@ with sync_playwright() as p:
     loan.locator('[name="kind"]').select_option("car")
     expect(loan.locator('[name="interestTax"]')).to_have_value("4")
     loan.locator('[name="rateType"]').select_option("fixed")
-    for name, value in {"name":"My car", "balance":"10000", "tan":"6", "taeg":"8", "monthlyCosts":"5", "start":"2026-09-01", "end":"2031-08-31", "paymentDay":"30"}.items():
+    for name, value in {"name":"My car", "balance":"10000", "tan":"6", "taeg":"8", "monthlyCosts":"5", "start":"01/09/2026", "end":"31/08/2031", "paymentDay":"30"}.items():
         loan.locator(f'[name="{name}"]').fill(value)
     loan.get_by_role("button", name="Save loan").click()
     expect(page.locator("#loan-dialog")).not_to_be_visible()
@@ -313,7 +324,7 @@ with sync_playwright() as p:
     home = page.locator("#loan-form")
     expect(page.locator("#loan-index-fields")).to_be_visible()
     for name, value in {"name": "My home", "balance": "120000", "indexRate": "2.104", "spread": "0.9",
-                        "start": "2026-10-01", "end": "2046-09-30", "paymentDay": "8"}.items():
+                        "start": "01/10/2026", "end": "30/09/2046", "paymentDay": "8"}.items():
         home.locator(f'[name="{name}"]').fill(value)
     expect(home.locator('[name="tan"]')).to_have_value("3.004")
     assert home.locator('[name="tan"]').evaluate("el => el.readOnly") is True
@@ -430,7 +441,7 @@ with sync_playwright() as p:
     with page.expect_download() as planning_backup:
         page.locator("#backup").click()
     backup = Path(planning_backup.value.path()).read_bytes()
-    assert json.loads(backup)["version"] == 4
+    assert json.loads(backup)["version"] == 5
     page.locator("#clear-data").click()
     page.locator("#restore").set_input_files({"name": "planning.json", "mimeType": "application/json", "buffer": backup})
     saved = page.evaluate("JSON.parse(localStorage.getItem('conta-v1'))")
@@ -469,7 +480,7 @@ with sync_playwright() as p:
     page.locator("#add-investment-plan").click()
     plan = page.locator("#investment-plan-form")
     plan.locator('[name="accountId"]').select_option(label="Spending")
-    for name, value in {"amount":"50", "start":"2026-09-01", "end":"2027-08-31", "day":"1", "initialValue":"100", "annualRate":"5"}.items():
+    for name, value in {"amount":"50", "start":"01/09/2026", "end":"31/08/2027", "day":"1", "initialValue":"100", "annualRate":"5"}.items():
         plan.locator(f'[name="{name}"]').fill(value)
     plan.get_by_role("button", name="Save contribution plan").click()
     expect(page.locator("#investment-plan-dialog")).to_be_hidden()
@@ -480,7 +491,7 @@ with sync_playwright() as p:
     page.locator('nav a[href="#loans"]').click()
     page.locator("#add-loan").click()
     loan = page.locator("#loan-form")
-    for name, value in {"name":"Small loan", "balance":"120", "tan":"0", "start":"2026-09-01", "end":"2027-08-31", "paymentDay":"1"}.items():
+    for name, value in {"name":"Small loan", "balance":"120", "tan":"0", "start":"01/09/2026", "end":"31/08/2027", "paymentDay":"1"}.items():
         loan.locator(f'[name="{name}"]').fill(value)
     loan.locator('[name="accountId"]').select_option(label="Spending")
     expect(page.locator("#loan-date-summary")).to_contain_text("12 payments")
@@ -489,7 +500,7 @@ with sync_playwright() as p:
     page.locator('nav a[href="#planning"]').click()
     page.locator("#add-recurring").click()
     recurring = page.locator("#recurring-form")
-    for name, value in {"description":"Internet", "amount":"100", "start":"2026-09-01", "day":"1"}.items():
+    for name, value in {"description":"Internet", "amount":"100", "start":"01/09/2026", "day":"1"}.items():
         recurring.locator(f'[name="{name}"]').fill(value)
     recurring.locator('[name="accountId"]').select_option(label="Spending")
     recurring.get_by_role("button", name="Save monthly expense").click()
@@ -526,8 +537,8 @@ with sync_playwright() as p:
     expect(page.locator("#payment-list")).to_contain_text("No unpaid commitments")
     expect(page.locator("#post-recurring")).to_be_disabled()
     # Dates and payday persist and drive the salary rows.
-    page.locator("#forecast-start").fill("2026-09-01")
-    page.locator("#forecast-end").fill("2026-10-31")
+    page.locator("#forecast-start").fill("01/09/2026")
+    page.locator("#forecast-end").fill("31/10/2026")
     page.locator("#forecast-payday").fill("28")
     page.locator("#forecast-form").get_by_role("button", name="Save salary plan").click()
     expect(page.locator("#forecast-results tr")).to_have_count(2)
@@ -576,16 +587,16 @@ with sync_playwright() as p:
     # A later year must reach the inputs too, not only the validators.
     page.locator('nav a[href="#tax"]').click()
     payroll = page.locator("#payroll-form")
-    payroll.locator('[name="month"]').fill("2027-03")
+    payroll.locator('[name="month"]').fill("03/2027")
     payroll.get_by_role("button", name="Calculate take-home pay").click()
     expect(page.locator("#payroll-result")).to_contain_text("2026 tables applied to 2027")
     page.locator('nav a[href="#planning"]').click()
     page.locator("#reset-forecast").click()
     expect(page.locator("#forecast-heading")).to_have_text("Your salary plan · 2027")
-    expect(page.locator("#forecast-start")).to_have_value("2027-03-01")
+    expect(page.locator("#forecast-start")).to_have_value("01/03/2027")
     expect(page.locator("#forecast-results tr")).to_have_count(10)
     expect(page.locator("#forecast-error")).to_be_empty()
-    page.locator("#forecast-end").fill("2028-02-29")
+    page.locator("#forecast-end").fill("29/02/2028")
     page.locator("#forecast-form").get_by_role("button", name="Save salary plan").click()
     expect(page.locator("#forecast-error")).to_contain_text("one calendar year")
     assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).forecast.end") == "2027-12-31"
