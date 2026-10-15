@@ -181,7 +181,7 @@ function renderStocks(preserve=false){
   for(const [id,name,value] of draft){const e=$('#'+id)?.elements.namedItem(name);if(e)e.value=value;}
   updateTradePreview();
 }
-const removeButton=s=>state.watchlist.includes(s)?`<p><button class="button secondary" data-unwatch="${escape(s)}">Stop watching ${escape(s)}</button></p>`:'';
+const removeButton=s=>`<p><button class="button secondary" data-${state.watchlist.includes(s)?'unwatch':'watch'}="${escape(s)}">${state.watchlist.includes(s)?'Stop watching':'Watch'} ${escape(s)}</button></p>`;
 function stockChart(r,m){
   const n=Math.min(r.dates.length,252),dates=r.dates.slice(-n),series=[['Close',r.closes.slice(-n),'#2b7a4b'],['50-day average',m.sma50Series.slice(-n),'#b4731f'],['200-day average',m.sma200Series.slice(-n),'#4f78b3']];
   const values=series.flatMap(([,v])=>v).filter(v=>v!==null),low=Math.min(...values),high=Math.max(...values),span=Math.max(high-low,high*0.01||1);
@@ -299,13 +299,19 @@ $('#benchmark-form').addEventListener('submit',event=>{
   if(!SYMBOL.test(symbol)){$('#stocks-error').textContent='Enter a valid benchmark ticker.';return;}
   if(save({...state,benchmark:symbol})){$('#stocks-error').textContent='';renderStocks();}
 });
+const watchSymbol=()=>{
+  const symbol=$('#watch-form').elements.symbol.value.trim().toUpperCase();$('#stocks-error').textContent='';
+  if(SYMBOL.test(symbol))return symbol;
+  $('#stocks-error').textContent='Enter a market ticker such as GALP.LS, VWCE.DE or AAPL.';return null;
+};
+const openStock=symbol=>{$('#watch-form').reset();location.hash=`#stocks/${encodeURIComponent(symbol)}`;render();};
 $('#watch-form').addEventListener('submit',event=>{
-  event.preventDefault();const f=event.currentTarget,symbol=f.elements.symbol.value.trim().toUpperCase();$('#stocks-error').textContent='';
-  if(!SYMBOL.test(symbol)){$('#stocks-error').textContent='Enter a market ticker such as GALP.LS, VWCE.DE or AAPL.';return;}
-  if(!state.watchlist.includes(symbol)&&!save({...state,watchlist:[...state.watchlist,symbol]}))return;
-  f.reset();location.hash=`#stocks/${encodeURIComponent(symbol)}`;render();
+  event.preventDefault();const symbol=watchSymbol();
+  if(symbol&&(state.watchlist.includes(symbol)||save({...state,watchlist:[...state.watchlist,symbol]})))openStock(symbol);
 });
+$('#lookup').addEventListener('click',()=>{const symbol=watchSymbol();if(symbol)openStock(symbol);});
 $('#stock-detail').addEventListener('click',event=>{
+  const w=event.target.closest('[data-watch]');if(w&&save({...state,watchlist:[...state.watchlist,w.dataset.watch]}))return render();
   const b=event.target.closest('[data-unwatch]');if(!b)return;
   if(save({...state,watchlist:state.watchlist.filter(s=>s!==b.dataset.unwatch)})){stockCache.delete(b.dataset.unwatch);location.hash='#stocks';render();}
 });
@@ -932,7 +938,7 @@ function renderInvestments(){
   $('#add-investment-plan').disabled=!state.holdings.length;$('#add-contribution').disabled=!state.holdings.length;
   $('#investment-plans').innerHTML=state.investmentPlans.map(p=>{
     const h=state.holdings.find(h=>h.id===p.holdingId);
-    return `<div class="commitment-row"><div><strong>${escape(h.name)}</strong><small>${dateLabel(p.start)} – ${dateLabel(p.end)} · Day ${p.day} · ${escape(accountName(p.accountId))} · ${p.enabled?'Active':'Paused'} · Assumed ${percent(p.annualRate)} yearly</small></div><strong>${money(p.amount)}<small>per month</small></strong><div><button class="icon-button" data-investment-edit="${escape(p.id)}">Edit</button><button class="icon-button" data-investment-delete="${escape(p.id)}">Delete plan</button></div></div>`;
+    return `<div class="commitment-row"><div><strong>${escape(h.name)}</strong><small>${dateLabel(p.start)} – ${dateLabel(p.end)} · Day ${p.day} · ${escape(accountName(p.accountId))} · ${p.enabled?'Active':'Paused'} · Assumed ${percent(p.annualRate)} yearly</small></div><strong>${p.amount?money(p.amount)+'<small>per month</small>':'<small>Growth only</small>'}</strong><div><button class="icon-button" data-investment-edit="${escape(p.id)}">Edit</button><button class="icon-button" data-investment-delete="${escape(p.id)}">Delete plan</button></div></div>`;
   }).join('')||'<p class="empty">Add a holding, then set a monthly contribution and your assumed growth rate.</p>';
   $('#investment-projection').innerHTML=state.investmentPlans.map(p=>{
     try{

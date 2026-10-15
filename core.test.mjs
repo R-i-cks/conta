@@ -289,8 +289,13 @@ test('investment projection conserves contributions at zero growth, supports los
   assert.ok(projectInvestment({...investmentPlan,annualRate:5}).value>220000);
   const onlyGrowth=projectInvestment({...investmentPlan,start:'2026-01-01',end:'2030-01-01',enabled:false,annualRate:10});
   assert.equal(onlyGrowth.value,146410,'four 365.25-day years compound the annual effective rate');
+  // Interest-paying cash or Certificados de Aforro: a 0 € plan grows without scheduling contributions.
+  const cash=projectInvestment({...investmentPlan,amount:0,start:'2026-01-01',end:'2027-01-01',annualRate:2.5});
+  assert.equal(cash.contributed,0);assert.equal(cash.value,102498,'365 of 365.25 days at 2.5%');
+  const growthOnly={...cashWorkspace(),holdings:[ppr],investmentPlans:[validateInvestmentPlan({...investmentPlan,amount:0})]};
+  assert.equal(validateState(growthOnly).investmentPlans[0].amount,0,'the workspace saves it');assert.equal(pendingPayments(growthOnly,'2027-08-31').length,0,'no contribution is scheduled');assert.equal(cashPlan(growthOnly,'2026-09','2026-09-20').available,200000);
   assert.equal(projectInvestment({...investmentPlan,start:'2028-02-29',end:'2028-03-30',day:31}).contributed,10000);
-  for(const patch of [{annualRate:-100},{annualRate:NaN},{amount:0},{end:'bad'},{day:32}])assert.throws(()=>validateInvestmentPlan({...investmentPlan,...patch}));
+  for(const patch of [{annualRate:-100},{annualRate:NaN},{amount:-1},{end:'bad'},{day:32}])assert.throws(()=>validateInvestmentPlan({...investmentPlan,...patch}));
 });
 test('PPR contributions reserve cash, move value without spending, roundtrip and undo safely',()=>{
   let s={...cashWorkspace(),holdings:[ppr],investmentPlans:[investmentPlan]};

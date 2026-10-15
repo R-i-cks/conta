@@ -259,6 +259,17 @@ with sync_playwright() as p:
     expect(page.locator("#stock-detail .stock-head h2")).to_contain_text("GALP.LS Company")
     expect(page.locator("#stock-rows tr")).to_have_count(2)
     assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).watchlist") == ["GALP.LS"]
+    page.locator("#watch-form [name=symbol]").fill("edp.ls")
+    page.locator("#lookup").click()
+    expect(page.locator("#stock-detail .stock-head h2")).to_contain_text("EDP.LS Company")
+    expect(page.locator("#stock-rows tr")).to_have_count(2)
+    assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).watchlist") == ["GALP.LS"]
+    page.locator("#stock-detail [data-watch=EDP\\.LS]").click()
+    expect(page.locator("#stock-rows tr")).to_have_count(3)
+    page.get_by_role("button", name="Stop watching EDP.LS").click()
+    expect(page.locator("#stock-rows tr")).to_have_count(2)
+    page.locator("#stock-rows tr", has_text="GALP.LS").get_by_role("link", name="Open").click()
+    expect(page.locator("#stock-detail .stock-head h2")).to_contain_text("GALP.LS Company")
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.screenshot(path="/tmp/conta-stocks-mobile.png", full_page=True)

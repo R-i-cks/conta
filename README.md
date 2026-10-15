@@ -25,7 +25,7 @@ Conta brings cash accounts, transactions, salary planning, Portuguese tax estima
 | **Track the full picture** | Keep cash accounts, investments, PPRs, loans and net worth together. |
 | **Keep control of the data** | Save locally, export JSON backups and retain thirty previous workspace versions. |
 | **Refresh market holdings** | Opt in to delayed EUR quotes for exchange-traded stocks and ETFs. |
-| **Study each stock** | Price history, fundamentals, dated theses, position risk and trade previews, matched benchmark returns, historical patterns, volatility sensitivity and a colour-rated metric guide with stated thresholds, for holdings and a watchlist. |
+| **Study each stock** | Look up any ticker without owning or watching it. Price history, fundamentals, dated theses, position risk and trade previews, matched benchmark returns, historical patterns, volatility sensitivity and a colour-rated metric guide with stated thresholds, for holdings and a watchlist. |
 
 ## Quick start
 
@@ -112,7 +112,7 @@ Recurring bills have start/end dates, a payment day, an optional account and pau
 
 ## Recurring investments and PPR tracking
 
-In **Portfolio**, add a holding, then a **Contribution plan**: source account, monthly amount, payment day, start/end dates, investment value at the start and assumed annual effective growth rate. One plan per holding keeps the comparison unambiguous. Planned contributions reserve cash and appear in Planning. **Record contribution** records the amount paid, actual units received and valuation; it increases cost basis and deducts cash without classifying an investment purchase as everyday spending. Do not also enter it as an expense.
+In **Portfolio**, add a holding, then a **Contribution plan**: source account, monthly amount, payment day, start/end dates, investment value at the start and assumed annual effective growth rate. One plan per holding keeps the comparison unambiguous. A plan with a **0 € monthly contribution** projects growth only, for interest-paying broker cash, deposits or Certificados de Aforro, and schedules nothing. Planned contributions reserve cash and appear in Planning. **Record contribution** records the amount paid, actual units received and valuation; it increases cost basis and deducts cash without classifying an investment purchase as everyday spending. Do not also enter it as an expense.
 
 Holdings support **units × unit price** or **total statement value**. Unit-based EUR listings can refresh automatically when Conta opens; quotes may be delayed or temporarily unavailable. Total statement value supports insurance PPRs, deposits and managed portfolios without inventing a ticker or unit count. **Add PPR** selects the appropriate category and statement-value method while leaving the product and provider open to any bank, insurer or broker. Enter your own remaining cost basis and the latest statement value; no bank credentials, policy number or account number are required.
 
@@ -144,6 +144,18 @@ The annual section accepts **rendimento coletável**, after applicable deduction
 **Start from your salary plan** fills the field from the monthly settings instead: annual base salary plus any taxable meal excess, less the specific deduction of 8.54 × IAS or your Social Security contributions where those are higher (CIRS 25), less the IRS Jovem exemption for your income year within the annual cap. The breakdown is shown under the field. Treat it as a starting point for a single employment income and nothing else: other income, further deductions and the mínimo de existência are yours to add, and exempt IRS Jovem income still counts when the rate is determined, which this figure does not model.
 
 It uses the published column-B average rate for the preceding completed band plus the marginal column-A rate on the excess, per CIRS 68(2). A band-by-band display shows how progressive rates apply, with any rounding difference from the statutory published-average method disclosed. Joint taxation divides income by two and multiplies the resulting tax by two. Solidarity adds 2.5% on the quotient between €80,000 and €250,000 and 5% above €250,000.
+
+## Disclaimer
+
+Conta is a personal planning tool provided **as is**, without warranty of any kind. The author is not a financial adviser, financial or credit intermediary, accountant or lawyer, and is not authorised or supervised by the CMVM, Banco de Portugal or any other authority.
+
+- **Not investment advice.** Stock ratings, patterns, scenarios and the metric guide are mechanical rules applied to past prices. They are not a recommendation to buy, sell or hold anything, and past performance does not predict future results.
+- **Not tax or legal advice.** IRS brackets, IAS, IRS Jovem, meal allowance and Social Security figures are simplified rules for the year stated and may be outdated or inapplicable to you. The assessment issued by the Autoridade Tributária prevails. Confirm with a *contabilista certificado* before acting.
+- **Loan figures are simulations.** The lender's contract and TAEG prevail.
+- **Market data is third-party.** Quotes and company data come from Yahoo Finance, may be delayed, incomplete or wrong, and can stop working at any time. Conta is not affiliated with Yahoo, any bank, broker or authority.
+- **Your data, your responsibility.** Everything stays on your device. Keep your own backups. The author accepts no liability for lost data or for decisions made using this software.
+
+The same notice is shown in the app under **Your data → Legal notice**.
 
 ## Sources and versioning
 

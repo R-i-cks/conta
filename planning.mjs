@@ -21,7 +21,7 @@ export function pendingPayments(state,through) {
       if(row.period>0&&date<=through&&!l.posted.includes(row.month))payments.push({kind:'loan',sourceId:l.id,month:row.month,date,description:l.name,category:l.kind==='mortgage'?'Housing':l.kind==='car'?'Transport':'Other',amount:row.total,principal:row.principal,accountId:l.accountId});
     }
   }
-  for(const p of state.investmentPlans||[])for(const o of dueOccurrences(p,through))payments.push({...o,kind:'investment',sourceId:p.id,description:state.holdings.find(h=>h.id===p.holdingId)?.name||'Investment contribution',amount:p.amount,accountId:p.accountId});
+  for(const p of (state.investmentPlans||[]).filter(p=>p.amount))for(const o of dueOccurrences(p,through))payments.push({...o,kind:'investment',sourceId:p.id,description:state.holdings.find(h=>h.id===p.holdingId)?.name||'Investment contribution',amount:p.amount,accountId:p.accountId});
   return payments.sort((a,b)=>a.date.localeCompare(b.date)||a.description.localeCompare(b.description));
 }
 export function postDueExpenses(state,through,idFactory,selection=null) {
