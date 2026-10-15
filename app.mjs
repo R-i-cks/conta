@@ -1,7 +1,7 @@
 import {validateInvestmentPlan,projectInvestment,recordContribution,undoContribution} from './investments.mjs';
-import {LOAN_KINDS, amortize, compareLoan, loanDates, dueDate} from './loans.mjs';
+import {LOAN_KINDS, amortize, compareLoan, loanDates, dueDate, validMonth} from './loans.mjs';
 import {defaultForecast, validateForecast, projectYear, pendingPayments, cashPlan, postDueExpenses, postSalary, scheduledTransactions, expectedMonth} from './planning.mjs';
-import {BRACKETS, CATEGORIES, ASSET_TYPES, CARD_KIND, cents, calculateTax, totals, monthlyOutflows, validateState, toCSV, csvCell, accountBalances, portfolio, trackedLoanDebt, loanOutstanding, netWorth, dateLabel, monthLabel, termLabel} from './core.mjs';
+import {BRACKETS, CATEGORIES, ASSET_TYPES, CARD_KIND, cents, defaultShortcuts, validDate, calculateTax, totals, monthlyOutflows, validateState, toCSV, csvCell, accountBalances, portfolio, trackedLoanDebt, loanOutstanding, netWorth, dateLabel, monthLabel, termLabel} from './core.mjs';
 import {calculatePayroll, annualTaxableEstimate, YOUTH_CAP} from './payroll.mjs';
 import {parseStatement,identifyImportRows,suggestCategory,rememberMerchant} from './statement.mjs';
 const $ = selector => document.querySelector(selector);
@@ -17,14 +17,18 @@ for(const input of document.querySelectorAll('input[type=date],input[type=month]
   Object.assign(input,{type:'text',inputMode:'numeric',placeholder:month?'mm/yyyy':'dd/mm/yyyy',pattern:pattern.source.slice(1,-1),title:month?'mm/yyyy':'dd/mm/yyyy'});
   input.dataset.isoDate='';
   Object.defineProperty(input,'value',{
-    get(){const m=pattern.exec(nativeValue.get.call(this).trim());return m?m.slice(1).reverse().join('-'):'';},
-    set(iso){nativeValue.set.call(this,iso?String(iso).split('-').reverse().join('/'):'');},
+    get(){const m=pattern.exec(nativeValue.get.call(this).trim()),iso=m?m.slice(1).reverse().join('-'):'';return (month?validMonth(iso):validDate(iso))&&!(this.min&&iso<this.min)&&!(this.max&&iso>this.max)?iso:'';},
+    set(iso){nativeValue.set.call(this,iso?String(iso).split('-').reverse().join('/'):'');this.setCustomValidity('');},
   });
+  // type=text ignores min/max, so a typed value the getter rejects must fail validation too.
+  input.addEventListener('input',()=>input.setCustomValidity(nativeValue.get.call(input).trim()&&!input.value?input.title:''));
 }
+document.addEventListener('reset',event=>{for(const input of event.target.querySelectorAll('[data-iso-date]'))input.setCustomValidity('');},true);
 document.addEventListener('formdata',event=>{for(const input of event.target.querySelectorAll('[data-iso-date][name]'))event.formData.set(input.name,input.value);},true);
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const KEY = 'conta-v1';
-const emptyState = () => validateState({version:1,demo:false,transactions:[],tax:{taxable:null,joint:false}});
+const withoutPlannedSalary=s=>({...s,forecast:{...s.forecast,rows:s.forecast.rows.map(row=>({...row,gross:0,holiday:0,christmas:0,mealDays:0}))}});
+const emptyState = () => withoutPlannedSalary(validateState({version:1,demo:false,transactions:[],tax:{taxable:null,joint:false}}));
 function sampleState() {
   const transactions = [];
   const now = new Date();
@@ -34,11 +38,10 @@ function sampleState() {
     const entries = [['Monthly salary','Salary','income',285000,1],['Rent','Housing','expense',85000,2],['Weekly groceries','Groceries','expense',15320-offset*650,6],['Metro pass','Transport','expense',4000,7],['Electricity & internet','Utilities','expense',10400+offset*210,8],['Dinner with friends','Dining','expense',4850+offset*230,11],['A good book','Leisure','expense',1890,14],['Weekend groceries','Groceries','expense',7825,16]];
     for(const [description, category, type, amount, day] of entries) transactions.push({id:crypto.randomUUID(),description,category,type,amount,date:`${month}-${String(day).padStart(2,'0')}`});
   }
-  const sample=validateState({version:1,demo:true,transactions,tax:{taxable:3600000,joint:false}});
-  sample.forecast={...sample.forecast,rows:sample.forecast.rows.map(row=>({...row,gross:0,holiday:0,christmas:0,mealDays:0}))};
+  const sample=withoutPlannedSalary(validateState({version:1,demo:true,transactions,tax:{taxable:3600000,joint:false}}));
   sample.accounts=[{id:'demo-bank',name:'Everyday account',bank:'Sample bank',kind:'Current',opening:100000},{id:'demo-savings',name:'A little breathing room',bank:'Sample bank',kind:'Savings',opening:450000}];
   sample.transactions=sample.transactions.map(t=>({...t,accountId:'demo-bank'}));
-  sample.expenseShortcuts=['Fuel','Groceries','Office','Tech'].map(name=>({id:crypto.randomUUID(),name,category:name,accountId:'demo-bank'}));
+  sample.expenseShortcuts=defaultShortcuts('demo-bank');
   sample.holdings=[{id:'demo-etf',name:'Global equity fund · sample',symbol:'DEMO',broker:'Sample broker',kind:'ETF',units:40,cost:400000,price:112.5,updated:today()}];
   return sample;
 }
@@ -344,13 +347,12 @@ function renderWealth() {
   const allocations=ASSET_TYPES.map(kind=>({kind,value:investments.positions.filter(h=>h.kind===kind).reduce((sum,h)=>sum+h.value,0)})).filter(a=>a.value>0);
   $('#allocation').innerHTML=allocations.map((a,i)=>`<div class="allocation-row"><div><span>${a.kind}</span><strong>${percent(a.value/investments.value*100)}</strong></div><div class="allocation-track"><div style="width:${a.value/investments.value*100}%;background:${colors[i]}"></div></div><small>${money(a.value)}</small></div>`).join('')||'<p class="empty">Your asset mix will appear here.</p>';
   const history=[...state.snapshots].sort((a,b)=>a.date.localeCompare(b.date));
-  const worthHistory=history.filter(s=>s.debts!==undefined);
   $('#snapshot-rows').innerHTML=[...history].reverse().map(s=>`<tr><td>${dateLabel(s.date)}</td><td>${money(s.cash)}</td><td>${money(s.investments)}</td><td>${s.debts===undefined?'—':money(s.debts)}</td><td>${s.debts===undefined?'Assets only: '+money(s.cash+s.investments):money(s.cash+s.investments-s.debts)}</td><td><button class="icon-button" data-snapshot-delete="${s.date}">Delete</button></td></tr>`).join('');
-  if(worthHistory.length<2) $('#wealth-chart').innerHTML=`<div class="empty snapshot-empty"><span class="little-spark" aria-hidden="true">✳</span><p>${worthHistory.length?'Your first net worth snapshot is saved. Save on another day to see your progress.':'Start your timeline. Save today’s financial net worth.'}</p><strong>Today: ${money(netWorth(state,today()).total)}</strong></div>`;
+  if(history.length<2) $('#wealth-chart').innerHTML=`<div class="empty snapshot-empty"><span class="little-spark" aria-hidden="true">✳</span><p>${history.length?'Your first net worth snapshot is saved. Save on another day to see your progress.':'Start your timeline. Save today’s financial net worth.'}</p><strong>Today: ${money(netWorth(state,today()).total)}</strong></div>`;
   else {
-    const values=worthHistory.map(s=>s.cash+s.investments-s.debts),low=Math.min(...values),high=Math.max(...values),span=Math.max(100,high-low);
-    const points=worthHistory.map((s,i)=>[55+i/(worthHistory.length-1)*470,20+(high-values[i])/span*130]);
-    $('#wealth-chart').innerHTML=`<svg class="wealth-svg" viewBox="0 0 560 195" role="img" aria-label="Financial net worth from ${dateLabel(worthHistory[0].date)} to ${dateLabel(worthHistory.at(-1).date)}, ending at ${money(values.at(-1))}"><line x1="55" x2="530" y1="20" y2="20" stroke="#e6eadf"/><line x1="55" x2="530" y1="150" y2="150" stroke="#e6eadf"/><text x="0" y="24">${Math.round(high/100).toLocaleString('en-GB')} €</text><text x="0" y="154">${Math.round(low/100).toLocaleString('en-GB')} €</text><polyline points="${points.map(p=>p.join(',')).join(' ')}" fill="none" stroke="#345f43" stroke-width="3"/>${points.map(([x,y],i)=>`<circle cx="${x}" cy="${y}" r="4" fill="#345f43"><title>${dateLabel(worthHistory[i].date)}: ${money(values[i])}</title></circle>`).join('')}<text x="55" y="184">${dateLabel(worthHistory[0].date)}</text><text x="460" y="184">${dateLabel(worthHistory.at(-1).date)}</text></svg>`;
+    const values=history.map(s=>s.cash+s.investments-(s.debts??0)),low=Math.min(...values),high=Math.max(...values),span=Math.max(100,high-low);
+    const points=history.map((s,i)=>[55+i/(history.length-1)*470,20+(high-values[i])/span*130]);
+    $('#wealth-chart').innerHTML=`<svg class="wealth-svg" viewBox="0 0 560 195" role="img" aria-label="Financial net worth from ${dateLabel(history[0].date)} to ${dateLabel(history.at(-1).date)}, ending at ${money(values.at(-1))}"><line x1="55" x2="530" y1="20" y2="20" stroke="#e6eadf"/><line x1="55" x2="530" y1="150" y2="150" stroke="#e6eadf"/><text x="0" y="24">${Math.round(high/100).toLocaleString('en-GB')} €</text><text x="0" y="154">${Math.round(low/100).toLocaleString('en-GB')} €</text><polyline points="${points.map(p=>p.join(',')).join(' ')}" fill="none" stroke="#345f43" stroke-width="3"/>${points.map(([x,y],i)=>`<circle cx="${x}" cy="${y}" r="4" fill="#345f43"><title>${dateLabel(history[i].date)}: ${money(values[i])}${history[i].debts===undefined?' (assets only)':''}</title></circle>`).join('')}<text x="55" y="184">${dateLabel(history[0].date)}</text><text x="460" y="184">${dateLabel(history.at(-1).date)}</text></svg>`;
   }
 }
 function openRecord(formId,values) {
@@ -371,7 +373,7 @@ $('#account-form').addEventListener('submit',event=>{
   try {const v=Object.fromEntries(new FormData(f));const opening=cents(v.opening.replace(/^-/,'').trim())*(v.opening.startsWith('-')?-1:1);
     const account={...state.accounts.find(a=>a.id===v.id),...v,id:v.id||crypto.randomUUID(),name:v.name.trim(),bank:v.bank.trim(),opening};
     if(v.id&&!state.accounts.some(a=>a.id===v.id))throw new Error('This account was removed in another tab.');
-    const expenseShortcuts=state.accounts.length||v.id?state.expenseShortcuts:['Fuel','Groceries','Office','Tech'].map(name=>({id:crypto.randomUUID(),name,category:name,accountId:account.id}));
+    const expenseShortcuts=!v.id&&account.kind!==CARD_KIND&&!state.expenseShortcuts.length&&!state.accounts.some(a=>a.kind!==CARD_KIND)?defaultShortcuts(account.id):state.expenseShortcuts;
     commitRecord(f,{...state,expenseShortcuts,accounts:v.id?state.accounts.map(a=>a.id===v.id?account:a):[...state.accounts,account]});
   }catch(error){f.querySelector('.error').textContent=error.message;}
 });
@@ -691,6 +693,9 @@ $('#loan-form').addEventListener('submit',event=>{
     const old=state.loans.find(l=>l.id===v.id);
     const loan={...v,...loanDates(v.start,v.end,Number(v.paymentDay)),id:v.id||crypto.randomUUID(),name:v.name.trim(),balance:cents(v.balance),paymentDay:Number(v.paymentDay),accountId:v.accountId||null,posted:old?.posted||[],tan:Number(v.tan),indexRate:v.indexRate?Number(v.indexRate):null,spread:v.spread?Number(v.spread):null,taeg:v.taeg===''?null:Number(v.taeg),monthlyCosts:cents(v.monthlyCosts||'0'),interestTax:Number(v.interestTax),tracked:f.elements.tracked.checked};
     if(v.id&&!state.loans.some(l=>l.id===v.id))throw new Error('This loan was removed in another tab.');
+    // The balance is the principal as of the start date; recorded instalments from then on reduce it.
+    // ponytail: a balance as-of date on the loan would let a rebase keep the old start; add it if users ask.
+    if(old&&loan.balance!==old.balance&&loan.start===old.start&&loanOutstanding(state,old)!==old.balance)throw new Error(`Instalments recorded since ${dateLabel(old.start)} already reduce this balance. To use your lender's current figure, also move the start date to the next unpaid instalment.`);
     amortize(loan);
     commitRecord(f,{...state,loans:v.id?state.loans.map(l=>l.id===v.id?loan:l):[...state.loans,loan]});
     $('#selected-loan').value=loan.id;updateLoanSimulation();
@@ -855,7 +860,7 @@ statementForm.addEventListener('submit',async event=>{
   try{
     const accountId=statementForm.elements.accountId.value,previous=state;
     if(!state.accounts.some(a=>a.id===accountId))throw new Error('Choose an existing paying account.');
-    const drafts=statementRows.map(r=>({...r,date:r.dateInput===undefined?r.date:statementISODate(r.dateInput),amount:r.selected?cents(r.amountInput):r.amount}));
+    const drafts=statementRows.map((r,i)=>{try{return {...r,date:r.dateInput===undefined?r.date:statementISODate(r.dateInput),amount:r.selected?cents(r.amountInput):r.amount};}catch(error){throw new Error(`Row ${i+1}: ${error.message}`);}});
     for(const [i,r] of drafts.entries())if(r.selected&&(!r.date||!r.description.trim()||!['expense','income'].includes(r.type)||!r.amount))throw new Error(`Complete the date, description, direction and amount on row ${i+1}.`);
     const identified=await identifyImportRows(statementText,drafts,state.transactions,accountId);
     if(!$('#statement-dialog').open)return;

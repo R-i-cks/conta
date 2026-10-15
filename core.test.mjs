@@ -465,8 +465,8 @@ test('scheduled bills project money out until recorded; investment plans stay ou
   assert.ok(scheduledTransactions(s).every(t=>t.kind!=='investment'));
   assert.equal(new Set(scheduledTransactions(s).map(t=>t.id)).size,scheduledTransactions(s).length,'ids stay unique');
 });
-test('CSV export dates read dd/mm/yyyy',()=>{
-  assert.ok(toCSV([{...transaction,date:'2026-09-24'}]).includes('"24/09/2026"'));
+test('CSV export keeps ISO dates so every spreadsheet locale reads them the same',()=>{
+  assert.ok(toCSV([{...transaction,date:'2026-09-24'}]).includes('"2026-09-24"'));
 });
 test('loan terms read as years and months',()=>{
   assert.equal(termLabel(0),'0 months');

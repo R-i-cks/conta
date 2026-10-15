@@ -52,3 +52,20 @@ assert request(source, "https://elsewhere.example")[0] == 403
 assert request(b"not a PDF")[0] == 400
 status, result = request(pdf(b""))
 assert status == 422 and "scanned" in result["error"], (status, result)
+
+# pdftotext that floods stderr with font warnings while still working must not be killed.
+import os
+import stat
+import tempfile
+with tempfile.TemporaryDirectory() as stub_dir:
+    stub = os.path.join(stub_dir, "pdftotext")
+    with open(stub, "w") as handle:
+        handle.write("#!/bin/sh\nawk 'BEGIN{for(i=0;i<2000;i++)print \"Syntax Warning: bad font table\" > \"/dev/stderr\"}'\nsleep 0.3\necho '24/09/2026 MARKET -12,34'\n")
+    os.chmod(stub, stat.S_IRWXU)
+    original_path = os.environ["PATH"]
+    os.environ["PATH"] = stub_dir + os.pathsep + original_path
+    try:
+        status, result = request(source, "http://localhost:4173")
+    finally:
+        os.environ["PATH"] = original_path
+    assert status == 200 and "MARKET -12,34" in result["text"], (status, result)

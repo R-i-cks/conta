@@ -30,3 +30,8 @@ assert.equal(normalizeMerchant('  Café   DO   Bairro  '), 'café do bairro');
 const rules = rememberMerchant([], ' Café   DO Bairro ', 'Dining');
 assert.equal(suggestCategory('café do bairro', rules), 'Dining');
 assert.equal(rememberMerchant(rules, 'CAFÉ DO BAIRRO', 'Groceries').length, 1);
+// A blank debit column rendered as ' - ' is not a minus sign; the row must ask for a direction.
+const gap = parseStatement('24/09/2026 SALARIO - 1.234,56').rows[0];
+assert.equal(gap.type, null);
+assert.equal(gap.amount, 123456);
+assert.equal(parseStatement('24/09/2026 SALARIO -€ 1.234,56').rows[0].type, 'expense');

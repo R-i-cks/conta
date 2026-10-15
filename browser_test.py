@@ -94,7 +94,7 @@ with sync_playwright() as p:
     add("Salary test", "2500.29", "income", "Salary")
     add('<img src=x onerror="alert(1)">', "100.01", "expense", "Groceries")
     assert page.locator("#recent-list img").count() == 0
-    expect(page.locator("#balance")).to_contain_text("3466,48")
+    expect(page.locator("#balance")).to_contain_text("2400,28")
     expect(page.locator("#transaction-rows tr").first).to_contain_text(re.compile(r"\d{2}/\d{2}/\d{4}"))
     expect(page.locator("#spending .ring-center strong")).to_contain_text("100,01")
     expect(page.locator("#spending .spending-row")).to_have_count(1)

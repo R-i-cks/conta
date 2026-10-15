@@ -2,6 +2,7 @@ import {validateInvestmentPlan} from './investments.mjs';
 import {amortize, validateLoan, validMonth, validDate} from './loans.mjs';
 import {defaultForecast, validateForecast} from './planning.mjs';
 import {defaultPayroll, validatePayroll} from './payroll.mjs';
+import {normalizeMerchant} from './statement.mjs';
 // Mainland Portugal, income year 2026. Verified 2026-09-18.
 // CIRS articles 68, 68-A and 69; official sources linked in the UI and README.
 export const BRACKETS = [
@@ -35,6 +36,7 @@ export function calculateTax(taxableCents, joint = false) {
   });
   return {general, solidarity, slices, total: general + solidarity, rate, index, lower, upper, income, divisor, effective: taxableCents ? (general + solidarity) / taxableCents * 100 : 0};
 }
+export const defaultShortcuts=accountId=>['Fuel','Groceries','Office','Tech'].map(category=>({id:`quick-${category.toLowerCase()}`,name:category,category,accountId}));
 export function validateState(data) {
   if (!data || ![1,2,3,4,5].includes(data.version) || typeof data.demo !== 'boolean' || !Array.isArray(data.transactions) || data.transactions.length > 50000) throw new Error('This is not a valid Conta backup.');
   const legacy=data.version===1;
@@ -92,7 +94,7 @@ export function validateState(data) {
   const cashBuffer=data.cashBuffer===undefined?0:data.cashBuffer;
   if(!validMoney(cashBuffer))throw new Error('Invalid cash buffer.');
   const firstCashAccount=accounts.find(a=>a.kind!==CARD_KIND);
-  const expenseShortcuts=data.expenseShortcuts===undefined&&firstCashAccount?['Fuel','Groceries','Office','Tech'].map(category=>({id:`quick-${category.toLowerCase()}`,name:category,category,accountId:firstCashAccount.id})):data.expenseShortcuts??[];
+  const expenseShortcuts=data.expenseShortcuts===undefined&&firstCashAccount?defaultShortcuts(firstCashAccount.id):data.expenseShortcuts??[];
   if(!Array.isArray(expenseShortcuts)||expenseShortcuts.length>100)throw new Error('Invalid expense shortcuts.');
   const shortcutIds=new Set();
   for(const shortcut of expenseShortcuts){
@@ -103,7 +105,7 @@ export function validateState(data) {
   if(!Array.isArray(merchantRules)||merchantRules.length>1000)throw new Error('Invalid merchant rules.');
   const merchants=new Set();
   for(const rule of merchantRules){
-    const merchant=typeof rule?.merchant==='string'?rule.merchant.normalize('NFKC').trim().replace(/\s+/g,' ').toLocaleLowerCase('pt-PT'):'';
+    const merchant=typeof rule?.merchant==='string'?normalizeMerchant(rule.merchant):'';
     if(!validText(merchant,120)||merchants.has(merchant)||!CATEGORIES.includes(rule.category))throw new Error('Invalid merchant rule.');
     merchants.add(merchant);
   }
@@ -155,7 +157,7 @@ export function validateState(data) {
       ...(data.version>=3&&salaryPart?{salaryPart,occurrence}:{}),
       ...(importSource!==undefined?{importSource,importKey}:{})};
   };
-  return {version:5,demo:data.demo,cashBuffer,expenseShortcuts:expenseShortcuts.map(({id,name,category,accountId})=>({id,name,category,accountId})),merchantRules:merchantRules.map(({merchant,category})=>({merchant:merchant.normalize('NFKC').trim().replace(/\s+/g,' ').toLocaleLowerCase('pt-PT'),category})),
+  return {version:5,demo:data.demo,cashBuffer,expenseShortcuts:expenseShortcuts.map(({id,name,category,accountId})=>({id,name,category,accountId})),merchantRules:merchantRules.map(({merchant,category})=>({merchant:normalizeMerchant(merchant),category})),
     investmentPlans:investmentPlans.map(validateInvestmentPlan),contributions:contributions.map(({id,holdingId,accountId,date,amount,units,planId,occurrence})=>({id,holdingId,accountId,date,amount,units,...(planId?{planId,occurrence}:{})})),
     recurring:recurring.map(({id,description,category,amount,accountId,start,end,day,enabled,posted})=>({id,description,category,amount,accountId,start,end,day,enabled,posted:[...posted]})),
     loans:loans.map(validateLoan),forecast,
@@ -243,5 +245,5 @@ export function totals(transactions) {
 // read the cell as a formula. Every CSV export must go through this.
 export const csvCell = value => '"' + String(value).replace(/^[\s]*[=+\-@]/, "'$&").replaceAll('"', '""') + '"';
 export function toCSV(transactions) {
-  return '\uFEFF' + [['Date', 'Description', 'Type', 'Category', 'Amount (EUR)'], ...transactions.map(t => [dateLabel(t.date), t.description, t.type, t.category, (t.amount / 100).toFixed(2)])].map(row => row.map(csvCell).join(',')).join('\r\n');
+  return '\uFEFF' + [['Date', 'Description', 'Type', 'Category', 'Amount (EUR)'], ...transactions.map(t => [t.date, t.description, t.type, t.category, (t.amount / 100).toFixed(2)])].map(row => row.map(csvCell).join(',')).join('\r\n');
 }

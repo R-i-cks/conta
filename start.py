@@ -98,8 +98,11 @@ def pdf_to_text(source):
             chunks.append(chunk)
             remaining -= len(chunk)
         parts[name] = b"".join(chunks)
-        if remaining == 0:
+        if remaining == 0 and name == "text":
             overflow.set()
+        # Noisy font warnings are not a failure: keep draining so pdftotext never blocks on a full pipe.
+        while remaining == 0 and pipe.read(65536):
+            pass
 
     readers = [threading.Thread(target=read_bounded, args=("text", process.stdout, MAX_PDF_TEXT), daemon=True),
                threading.Thread(target=read_bounded, args=("error", process.stderr, 16384), daemon=True)]

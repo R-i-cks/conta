@@ -1,7 +1,7 @@
 // Bank PDFs vary widely. Only a single, explicitly signed amount on a dated
 // line is interpreted; every other line remains visible for manual review.
 const DATE = /^(\d{1,2}\/\d{1,2}(?:\/\d{4})?|\d{4}-\d{2}-\d{2})\b\s*/;
-const MONEY = /(?<![\d.,])([+-]?\s*€?\s*(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2})(?![\d.,])/g;
+const MONEY = /(?<![\d.,])([+-]?(?:€\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2})(?![\d.,])/g;
 
 function isoDate(value, year) {
   let y, m, d;
