@@ -55,7 +55,7 @@ function toast(message, persistent=false) {
 }
 // The file the launcher keeps next to the app is the record. localStorage is a
 // cache, so a blocked or full browser store no longer costs you your finances.
-let state, etag=null, storageBlocked=false, refreshingPrices=false;
+let state, etag=null, storageBlocked=false, browserOnly=false, refreshingPrices=false;
 // The cache also records which server version it was last written against, so
 // work saved but not yet accepted by the server survives a reload or a crash.
 const MARK=KEY+':sync';
@@ -73,7 +73,7 @@ async function loadRemote() {
   return validateState(await response.json());
 }
 let syncing=false,syncAgain=false;
-function queueSync() { cache.mark({etag,dirty:true}); sync(); }
+function queueSync() { if(browserOnly) return; cache.mark({etag,dirty:true}); sync(); }
 async function sync() {
   if(syncing) { syncAgain=true; return; }
   syncing=true;
@@ -84,6 +84,10 @@ async function sync() {
       const fresh=await loadRemote();
       if(fresh) { state=fresh; cache.write(JSON.stringify(state)); render(); }
       toast('Another window had saved newer data, so this workspace was reloaded. Re-enter your last change.',true);
+    } else if([404,405,501].includes(response.status)) {
+      // Static hosting (a preview site) has no app server: keep the work in this browser.
+      browserOnly=true;cache.mark({etag,dirty:false});
+      toast('No app server here: your changes stay in this browser only.');
     } else if(!response.ok) {
       throw new Error(`Server answered ${response.status}`);
     } else {
@@ -216,7 +220,7 @@ function stockView(r,m){
   <div class="middle-grid spaced"><article class="panel"><div class="panel-heading"><div><h2>How it has been moving</h2><p>Observations from the price series, not advice.</p></div></div><ul class="flag-list">${m.flags.map(fl=>`<li data-tone="${fl.tone}"><span class="dot"></span><span>${escape(fl.text)}</span></li>`).join('')}</ul>
   <div class="metric-grid spaced"><div><small>RSI (14)</small><strong>${num(m.rsi,0)}</strong></div><div><small>50-day average</small><strong>${num(m.sma50)}</strong></div><div><small>200-day average</small><strong>${num(m.sma200)}</strong></div><div><small>Volatility, last month</small><strong>${pct(m.vol30).slice(1)}</strong></div><div><small>Support</small><strong>${num(m.support)}</strong></div><div><small>Resistance</small><strong>${num(m.resistance)}</strong></div><div><small>Volume vs 3 months</small><strong>${m.volumeRatio===null?'—':num(m.volumeRatio,1)+'×'}</strong></div><div><small>Drawdown now</small><strong>${pct(m.currentDrawdown)}</strong></div></div></article>
   <article class="panel"><div class="panel-heading"><div><h2>Volatility sensitivity</h2><p>Model percentiles from measured volatility, not probabilities of future outcomes.</p></div></div><div class="table-wrap"><table><thead><tr><th>Horizon</th><th>Low (10th pct)</th><th>Median</th><th>High (90th pct)</th></tr></thead><tbody>${m.scenarios.map(s=>`<tr><td style="white-space:nowrap">${s.horizon}</td><td class="negative">${num(s.bear)}</td><td>${num(s.base)}</td><td class="positive">${num(s.bull)}</td></tr>`).join('')}</tbody></table></div>
-  ${Number.isFinite(fin.targetMeanPrice)?`<p class="scope-note">Analyst 12-month targets via Yahoo: ${num(fin.targetLowPrice)} low · ${num(fin.targetMeanPrice)} mean · ${num(fin.targetHighPrice)} high from ${num(fin.numberOfAnalystOpinions,0)} analysts${fin.recommendationKey?`; consensus "${escape(fin.recommendationKey.replace('_',' '))}"`:''}${rec?` (${num(rec.strongBuy+rec.buy,0)} buy, ${num(rec.hold,0)} hold, ${num(rec.sell+rec.strongSell,0)} sell ratings)`:''}.</p>`:''}
+  ${Number.isFinite(fin.targetMeanPrice)?`<p class="scope-note">Analyst 12-month targets via Yahoo: ${num(fin.targetLowPrice)} low · ${num(fin.targetMeanPrice)} mean · ${num(fin.targetHighPrice)} high from ${num(fin.numberOfAnalystOpinions,0)} analysts${typeof fin.recommendationKey==='string'?`; consensus "${escape(fin.recommendationKey.replace('_',' '))}"`:''}${rec?` (${num(rec.strongBuy+rec.buy,0)} buy, ${num(rec.hold,0)} hold, ${num(rec.sell+rec.strongSell,0)} sell ratings)`:''}.</p>`:''}
   <p class="source-note">Bands assume no drift and that past volatility persists; real markets jump. These are model sensitivities, not forecasts.</p></article></div>
   <article class="panel spaced"><div class="panel-heading"><div><h2>Patterns</h2></div></div><details><summary>Show historical patterns</summary><p>Named chart shapes that completed, with what this stock did in the month after each one. Read each hit rate against this stock's own habit: in this period any month was up ${m.patterns.baseline.count?num(m.patterns.baseline.up/m.patterns.baseline.count*100,0)+'% of the time':'—'}.</p>${m.patterns.length?`<ul class="flag-list">${m.patterns.map(patternLine).join('')}</ul>`:'<p class="empty">No named patterns completed in the last two years.</p>'}<p class="source-note">Definitions are strict: double tops and bottoms, head and shoulders, 60-day range breaks, 2% gaps, engulfing, hammer and shooting-star candles, and average crosses. A pattern counts on the day it completes, never earlier.</p></details></article>
   <article class="panel spaced"><div class="panel-heading"><div><h2>Fundamentals</h2><p>Company and fund data via Yahoo Finance${fundamentals.length?'':' — none available for this ticker'}.</p></div></div><div class="metric-grid">${fundamentals.map(([l,v,fmt])=>`<div><small>${l}</small><strong>${fmt(v)}</strong></div>`).join('')}</div></article>
@@ -322,7 +326,7 @@ function route() {
   document.querySelectorAll('.page').forEach(node=>node.hidden=node.id!==page);
   document.querySelectorAll('nav a').forEach(node=>{node.classList.toggle('active',node.dataset.page===page); if(node.dataset.page===page) node.setAttribute('aria-current','page'); else node.removeAttribute('aria-current');});
   document.title=`${{overview:'Overview',transactions:'Transactions',accounts:'Accounts',portfolio:'Portfolio',stocks:'Stocks',planning:'Planning',loans:'Loans',tax:'IRS calculator',settings:'Your data'}[page]} · Conta`;
-  if(page==='stocks'){stockSelected=param?decodeURIComponent(param).toUpperCase():null;renderStocks();}
+  if(page==='stocks'){stockSelected=param?(()=>{try{return decodeURIComponent(param).toUpperCase();}catch{return null;}})():null;renderStocks();}
 }
 const icons={Salary:'↙','Other income':'↙',Housing:'⌂',Groceries:'▧',Fuel:'⛽',Transport:'↔',Dining:'♧',Shopping:'◇',Office:'▤',Tech:'⌘',Health:'＋',Leisure:'♫',Utilities:'ϟ',Untracked:'?',Other:'·'};
 const trackedLoanBalance=()=>trackedLoanDebt(state,today());
