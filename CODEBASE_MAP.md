@@ -6,6 +6,7 @@
 | Workspace validation and totals | `core.mjs` | `validateState` migrates/normalizes schema v1–v5; balance, portfolio, debt and net-worth helpers feed the UI |
 | Salary, bills, cash planning | `planning.mjs`, `payroll.mjs`, `loans.mjs`, `investments.mjs` | Plans become scheduled rows; posting records transactions/contributions and updates occurrence history |
 | Local persistence | `app.mjs`, `start.py` | UI validates and caches, then reads/writes JSON through `/data`; launcher atomically saves backups |
+| Stock analytics | `stocks.mjs`, `app.mjs`, `start.py` | `/stock` fetches two years of prices and fundamentals from Yahoo (15-minute cache); `analyse` derives returns, averages, RSI, volatility, drawdown, trend, swing levels and volatility sensitivity; `benchmarkComparison` aligns adjusted closes on shared dates. Workspace theses/benchmark feed the Stocks page; position risk uses `portfolio`/`netWorth` with the live EUR position price, previews use `cashPlan`, and holding ticker autofill also reads `/stock` |
 | PDF statement import | `app.mjs`, `statement.mjs`, `start.py` | `/pdf-text` uses local `pdftotext`; parser proposes rows, duplicate/category helpers aid review, selected rows enter normal transaction validation |
 
 Spending flow: quick shortcut or transaction form → account-linked transaction → `validateState` → account balance and net worth. Reconciliation compares a manually entered bank balance with the calculated one and records the difference as a categorized transaction.

@@ -19,6 +19,7 @@
       <a href="#transactions" data-page="transactions"><span aria-hidden="true">⇄</span> Transactions</a>
       <a href="#accounts" data-page="accounts"><span aria-hidden="true">▤</span> Accounts</a>
       <a href="#portfolio" data-page="portfolio"><span aria-hidden="true">◴</span> Portfolio</a>
+      <a href="#stocks" data-page="stocks"><span aria-hidden="true">◍</span> Stocks</a>
       <a href="#planning" data-page="planning"><span aria-hidden="true">▥</span> Planning</a>
       <a href="#loans" data-page="loans"><span aria-hidden="true">⌁</span> Loans</a>
       <a href="#tax" data-page="tax"><span aria-hidden="true">%</span> IRS calculator <span class="nav-badge">2026</span></a>
@@ -82,6 +83,14 @@
         </article>
         <details class="panel spaced"><summary>Saved valuations</summary><div class="table-wrap"><table><thead><tr><th>Date</th><th>Cash</th><th>Investments</th><th>Loan debt</th><th>Financial net worth</th><th>Actions</th></tr></thead><tbody id="snapshot-rows"></tbody></table></div></details>
       </section>
+<section id="stocks" class="page" hidden>
+  <div class="page-heading"><div><p class="eyebrow">KNOW WHAT YOU HOLD</p><h1>Your stocks<span>.</span></h1><p class="subtitle">Prices, fundamentals and how each stock has been moving, in its listing currency.</p></div><form id="watch-form" class="filters"><label><span class="sr-only">Ticker to watch</span><input name="symbol" maxlength="20" placeholder="Ticker, e.g. GALP.LS" required pattern="[A-Za-z0-9.^=\-]{1,20}" title="Market ticker such as GALP.LS, VWCE.DE or AAPL"></label><button class="button primary" type="submit">＋ Watch</button></form></div>
+  <form id="benchmark-form" class="filters"><label>Benchmark<input name="symbol" maxlength="20" required value="VWCE.DE"></label><button class="button secondary">Save benchmark</button></form>
+  <p id="stocks-error" class="error" role="alert"></p>
+  <article class="panel"><div class="panel-heading"><div><h2>Tracked stocks</h2><p>Holdings with a ticker plus your watchlist. Open one for the full view.</p></div><button id="refresh-stocks" class="button secondary">↻ Refresh</button></div><div class="table-wrap"><table><thead><tr><th>Stock</th><th>Price</th><th>Day</th><th>1 month</th><th>1 year</th><th>Trend</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="stock-rows"></tbody></table></div><p id="stocks-empty" class="empty" hidden>Add a ticker above, or give a holding a market ticker on the Portfolio page.</p></article>
+  <div id="stock-detail" class="spaced" hidden></div>
+  <p class="source-note">Delayed quotes and company data come from Yahoo Finance through the local server, for tracked tickers and the benchmark while this page is open, and for holding ticker autofill; prices refresh at most every 15 minutes. Statistics describe past prices and do not predict. Scenario bands are ranges from measured volatility, not forecasts. Nothing here is investment advice.</p>
+</section>
 <section id="planning" class="page" hidden>
   <div class="page-heading"><div><p class="eyebrow">FROM HERE TO DECEMBER</p><h1>Make room for your plans<span>.</span></h1><p class="subtitle">Expected salary, regular expenses and loan payments, month by month.</p></div></div>
   <article class="panel"><div class="panel-heading"><h2>Your available cash</h2><label>Budget month<span class="field-status">Required</span><input id="budget-month" type="month" min="1900-01" max="2100-12" required></label></div><div id="planning-cash" class="plan-summary"></div><form id="cash-buffer-form" class="cash-buffer-form"><label>Keep as a buffer (€)<input name="buffer" type="number" min="0" max="1000000000" step="0.01" required><small>Safe to spend is available cash after this buffer.</small></label><button class="button secondary" type="submit">Save buffer</button><p class="error" role="alert"></p></form><p class="source-note">Cash recorded through today, less unpaid commitments through this month (including overdue bills). Future recorded expenses are reserved too. Planned salary is excluded until recorded, and meal-card balances are never available cash. Assign recorded payments to an account to reconcile its balance.</p><h3 class="spaced">Payments to plan for</h3><p id="next-payday" class="scope-note"></p><div id="payment-list"></div></article>

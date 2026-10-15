@@ -23,3 +23,18 @@
 .record-form,.record-form label,.record-form input,.record-form select{min-width:0}.record-form select{max-width:100%}.form-row{grid-template-columns:repeat(2,minmax(0,1fr))}
 .shortcut{display:flex;align-items:center;gap:3px;border:1px solid var(--line);border-radius:9px;padding:3px}.shortcut .button{border:0}.shortcut-panel .panel-heading{margin-bottom:12px}.cash-buffer-form{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin-top:16px}.cash-buffer-form label{max-width:240px;flex:1 1 180px}.cash-buffer-form .error{flex-basis:100%;margin:0}
 @media(max-width:450px){dialog .form-row{grid-template-columns:1fr}}
+.stock-head{display:flex;flex-wrap:wrap;justify-content:space-between;gap:14px;align-items:flex-end;margin-bottom:18px}
+.stock-head h2{margin:0 0 4px}.stock-price{font-size:30px;font-weight:700;letter-spacing:-.8px;line-height:1}
+.chart-legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin:8px 0 0;list-style:none;padding:0}
+.chart-legend i{display:inline-block;width:14px;height:0;border-top:2px solid;vertical-align:middle;margin-right:5px}
+.flag-list{list-style:none;padding:0;margin:0;display:grid;gap:10px}
+.flag-list li{display:flex;gap:10px;align-items:flex-start;font-size:13px;line-height:1.5}
+.flag-list .dot{flex:none;width:9px;height:9px;border-radius:50%;margin-top:6px;background:#9baeb1}
+.flag-list li[data-tone=positive] .dot{background:#2b7a4b}.flag-list li[data-tone=negative] .dot{background:#b4731f}
+.metric-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.metric-grid div{background:var(--bg);border-radius:10px;padding:12px}
+.metric-grid small{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
+.metric-grid strong{font-size:15px}
+a.icon-button{text-decoration:none;display:inline-block}
+textarea{width:100%;min-height:72px;padding:11px 12px;border:1px solid #dfe4d9;background:#fff;color:var(--ink);border-radius:7px;margin-top:8px;font:inherit;resize:vertical}
+textarea:focus-visible{outline:3px solid #699e4c;outline-offset:4px}

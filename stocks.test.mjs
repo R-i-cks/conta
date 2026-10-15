@@ -1,0 +1,81 @@
+import assert from 'node:assert/strict';
+import {sma, rsi, drawdown, volatility, periodReturn, trend, swings, lastCross, scenarios, analyse, shiftDate, benchmarkComparison} from './stocks.mjs';
+
+assert.deepEqual(sma([1,2,3,4,5],3), [null,null,2,3,4]);
+assert.equal(rsi([1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]).at(-1), 100, 'only gains reads 100');
+assert.ok(Math.abs(rsi([10,9,10,9,10,9,10,9,10,9,10,9,10,9,10,9,10]).at(-1)-50) < 1, 'alternating equal moves read about 50');
+assert.deepEqual(drawdown([100,120,90,110]), {max:0.75-1, current:110/120-1});
+assert.equal(volatility([5,5,5,5]), 0);
+assert.ok(Math.abs(volatility([100,101,100,101,100,101,100])-Math.log(1.01)*Math.sqrt(6/5)*Math.sqrt(252)) < 1e-9, 'sample stdev of daily log returns, annualised');
+assert.equal(shiftDate('2026-03-31',{months:1}), '2026-02-28', 'a month back from the 31st lands on the last day of February');
+assert.equal(shiftDate('2026-03-01',{days:1}), '2026-02-28');
+const dates=['2026-01-02','2026-01-05','2026-01-06'];
+assert.ok(Math.abs(periodReturn(dates,[100,110,121],'2026-01-05')-0.1)<1e-12);
+assert.equal(periodReturn(dates,[100,110,121],'2025-12-31'), null, 'no history before the target');
+const up=Array.from({length:126},(_,i)=>100*Math.exp(0.001*i));
+assert.equal(trend(up).label,'uptrend'); assert.ok(trend(up).r2>0.99); assert.ok(Math.abs(trend(up).annual-(Math.exp(0.252)-1))<1e-9);
+assert.equal(trend(Array.from({length:126},(_,i)=>100+(i%2))).label,'sideways');
+assert.deepEqual(swings([1,2,3,2,1,1,2,3,2,1,1,2,9,2,1,1,2,3,2,1,1,2],[1,2,3,2,1,0,2,3,2,1,1,2,9,2,1,1,2,3,2,1,1,2],2), {highs:[3,3,9,3],lows:[0,1,1,1,1,1]}, 'ties count as swing points');
+assert.deepEqual(lastCross([null,1,3,3,1],[null,2,2,2,2]), {type:'death',daysAgo:0});
+assert.deepEqual(lastCross([null,1,3,3,3],[null,2,2,2,2]), {type:'golden',daysAgo:2});
+assert.equal(lastCross([1,1],[2,2]), null);
+const s=scenarios(100,0.2);
+assert.equal(s[3].base,100); assert.ok(Math.abs(s[3].bull-100*Math.exp(1.2816*0.2))<1e-9); assert.ok(Math.abs(s[3].bear*s[3].bull-10000)<1e-6,'bands are symmetric in log space'); assert.ok(s.every(row=>!('trend' in row)));
+
+// A synthetic two-year series: a 30% fall, then recovery to a new high.
+const n=510, start=new Date('2024-10-14T00:00:00Z'), dates2=[], closes=[];
+for(let i=0,d=new Date(start);dates2.length<n;d.setUTCDate(d.getUTCDate()+1)){if(d.getUTCDay()===0||d.getUTCDay()===6)continue;dates2.push(d.toISOString().slice(0,10));closes.push(i<200?100-i*0.15:70+(i-200)*0.12);i++;}
+const m=analyse({dates:dates2,closes,adjusted:closes,highs:closes.map(c=>c*1.01),lows:closes.map(c=>c*0.99),volumes:closes.map(()=>1000)});
+assert.ok(m.price>m.sma50&&m.sma50>m.sma200,'recovery leg sits above both averages');
+assert.equal(m.cross.type,'golden');
+assert.ok(m.returns['1y']>0&&m.returns['1m']>0);
+assert.ok(m.fromHigh>-0.03,'at the 52-week high');
+assert.ok(m.rsi>99.9);
+assert.equal(m.scenarios.length,4);
+assert.ok(m.flags.some(f=>f.text.includes('50-day and 200-day averages')));
+assert.ok(m.flags.every(f=>!/\b(buy|sell)\b/i.test(f.text)),'no buy or sell wording');
+console.log('stocks ok');
+
+// Named patterns complete on the break, not on the swing, and history never peeks ahead.
+import {patterns, history, swingPoints} from './stocks.mjs';
+const mk=(closes,extra={})=>({dates:closes.map((_,i)=>`2026-${String(1+Math.floor(i/28)).padStart(2,'0')}-${String(1+i%28).padStart(2,'0')}`),closes,adjusted:closes,highs:closes.map(c=>c+0.5),lows:closes.map(c=>c-0.5),volumes:closes.map(()=>1),...extra});
+const dt=[];for(let i=0;i<=100;i++)dt.push(i<=10?100+i:i<=30?110-(i-10)*0.5:i<=50?100+(i-30)*0.525:i<=60?110.5-1.15*(i-50):99);
+assert.deepEqual(swingPoints(dt.map(c=>c+0.5),dt.map(c=>c-0.5)).highs.filter(s=>s.i<=60).map(s=>s.i),[10,50]);
+const top=patterns(mk(dt)).find(p=>p.key==='doubleTop');
+assert.equal(top.last.date,mk(dt).dates[60],'completes on the first close under the trough');
+assert.deepEqual(top.history,{count:1,up:0,median:0},'the flat tail after the break counts as not up');
+const flat=Array(70).fill(100).concat([105,106,107]);
+assert.deepEqual(patterns(mk(flat)).find(p=>p.key==='breakout').occurrences,1,'a run of new highs is one breakout');
+const gapped=mk([100,100,100,100,100,100,100,100],{opens:[100,100,100,100,100,100,103,100]});
+assert.equal(patterns(gapped).find(p=>p.key==='gapUp').last.daysAgo,1);
+const eng=mk([100,99,98,97,96,95,97],{opens:[100,100,99,98,97,96,94.5]});
+assert.equal(patterns(eng).find(p=>p.key==='bullishEngulfing').last.daysAgo,0);
+assert.equal(patterns(mk([100,99,98,97,96,95,97])).find(p=>p.key==='bullishEngulfing'),undefined,'candle patterns need opens');
+const series=[100,...Array(20).fill(100),110,...Array(4).fill(100),90,...Array(70).fill(100)];
+const h=history([0,5,90],series,21);
+assert.ok(h.count===2&&h.up===1&&Math.abs(h.median)<1e-12,'the third signal has no month ahead of it yet; an even count averages the middle two');
+assert.equal(rsi(Array(20).fill(5)).at(-1),null,'flat prices read no momentum');
+const gappedLast=mk([100,100,100,100,100,100,100,100],{opens:[100,100,100,100,100,100,100,103]});
+assert.equal(patterns(gappedLast).find(p=>p.key==='gapUp').last.daysAgo,0);
+assert.equal(patterns({...gappedLast,liveBar:true}).find(p=>p.key==='gapUp'),undefined,'a bar from an open session completes nothing');
+assert.ok(patterns(mk(dt)).baseline.count>0);
+assert.ok(patterns(mk(dt)).every(p=>!/\b(buy|sell)\b/i.test(p.name)));
+console.log('patterns ok');
+
+const a={dates:['2024-12-31','2025-01-02','2025-07-02','2025-10-02','2025-12-02','2026-01-02','2026-01-05'],adjusted:[50,100,110,120,125,150,999]};
+const b={dates:['2024-12-31','2025-01-02','2025-07-03','2025-10-02','2025-12-02','2026-01-02'],adjusted:[100,200,220,240,250,270]};
+const comparison=benchmarkComparison(a,b);
+assert.deepEqual(comparison.dates,['2025-01-02','2025-10-02','2025-12-02','2026-01-02']);
+assert.deepEqual(comparison.stock,[100,120,125,150]);
+assert.deepEqual(comparison.benchmark,[100,120,125,135]);
+assert.deepEqual(comparison.returns.map(r=>r.period),['1m','3m','6m','1y']);
+assert.equal(comparison.returns[2].start,'2025-01-02','both returns use the same earlier shared session');
+assert.equal(comparison.returns[3].stock,0.5);
+assert.ok(Math.abs(comparison.returns[3].difference-0.15)<1e-12);
+assert.equal(comparison.returns[3].end,'2026-01-02','ignore an unmatched latest session');
+const short=benchmarkComparison({dates:b.dates.slice(-2),adjusted:[10,12]},b);
+assert.equal(short.returns[3].stock,null);
+assert.equal(short.returns[3].difference,null);
+assert.deepEqual(benchmarkComparison(a,{dates:['2030-01-01'],adjusted:[1]}).dates,[]);
+assert.deepEqual(benchmarkComparison(a,{dates:a.dates,adjusted:a.dates.map(()=>0)}).dates,[]);
+assert.ok(m.flags.every(f=>!/often|no discount|usually|will happen/i.test(f.text)));

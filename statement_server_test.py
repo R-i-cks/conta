@@ -69,3 +69,24 @@ with tempfile.TemporaryDirectory() as stub_dir:
     finally:
         os.environ["PATH"] = original_path
     assert status == 200 and "MARKET -12,34" in result["text"], (status, result)
+
+# Stock reports: Yahoo's {"raw": n} wrappers unwrap, holiday gaps drop, dates follow the exchange clock.
+chart = {"chart": {"result": [{"meta": {"symbol": "T.LS", "currency": "EUR", "regularMarketPrice": 3.5, "regularMarketTime": 1792058130, "gmtoffset": 3600, "longName": "Test"},
+                                "timestamp": [1791972000, 1792058400, 1792144800],
+                                "indicators": {"quote": [{"close": [3.0, None, 3.5], "high": [3.1, None, None], "low": [2.9, None, 3.4], "volume": [10, None, None], "open": [2.95, None, 3.45]}],
+                                               "adjclose": [{"adjclose": [2.8, None, 3.5]}]}}]}}
+summary = {"quoteSummary": {"result": [{"price": {"marketCap": {"raw": 12.5, "fmt": "12.5"}, "maxAge": 1, "symbol": "T.LS"},
+                                         "recommendationTrend": {"trend": [{"period": "0m", "buy": {"raw": 2}}]}}]}}
+report = start.shape_stock(chart, summary)
+assert report["dates"] == ["2026-10-14", "2026-10-16"], report["dates"]
+assert report["closes"] == [3.0, 3.5] and report["adjusted"] == [2.8, 3.5] and report["volumes"] == [10, 0] and report["liveBar"] is False
+chart["chart"]["result"][0]["indicators"]["adjclose"][0]["adjclose"][0] = None
+assert start.shape_stock(chart, None)["adjusted"] == [3.0, 3.5], "one missing adjusted close means raw closes throughout"
+chart["chart"]["result"][0]["meta"]["currentTradingPeriod"] = {"regular": {"start": 1792144000, "end": 4102444800}}
+assert start.shape_stock(chart, None)["liveBar"] is True, "the last bar belongs to a session that has not closed"
+chart["chart"]["result"][0]["indicators"]["adjclose"][0]["adjclose"][0] = 2.8
+del chart["chart"]["result"][0]["meta"]["currentTradingPeriod"]
+assert report["opens"] == [2.95, 3.45] and report["highs"] == [3.1, 3.5], "a missing high falls back to the close"
+assert report["previousClose"] == 3.0 and report["price"] == 3.5 and report["updated"] == "2026-10-15"
+assert report["fundamentals"] == {"price": {"marketCap": 12.5, "symbol": "T.LS"}, "recommendationTrend": {"trend": [{"period": "0m", "buy": 2}]}}
+assert start.shape_stock(chart, None)["fundamentals"] is None

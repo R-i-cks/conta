@@ -13,7 +13,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
@@ -184,6 +184,87 @@ with sync_playwright() as p:
     page.screenshot(path="/tmp/conta-portfolio-mobile.png", full_page=True)
     page.set_viewport_size({"width": 1440, "height": 1100})
 
+    # Stocks: a stubbed /stock answer drives the per-ticker view for a holding and a watched ticker.
+    def stock_body(symbol):
+        days, day = [], date.today() - timedelta(days=740)
+        while len(days) < 510:
+            if day.weekday() < 5:
+                days.append(day.isoformat())
+            day += timedelta(days=1)
+        closes = [100 - i * 0.15 if i < 200 else 70 + (i - 200) * 0.12 for i in range(510)]
+        return json.dumps({"symbol": symbol, "name": f"{symbol} Company", "currency": "EUR", "exchange": "Lisbon", "type": "EQUITY", "price": closes[-1], "previousClose": closes[-2], "updated": days[-1],
+                           "dates": days, "closes": closes, "adjusted": closes, "highs": [c * 1.01 for c in closes], "lows": [c * 0.99 for c in closes], "volumes": [1000] * 510, "opens": closes,
+                           "fundamentals": {"price": {"marketCap": 1.5e9}, "summaryDetail": {"trailingPE": 12.5}, "financialData": {"targetLowPrice": 90, "targetMeanPrice": 110, "targetHighPrice": 130, "numberOfAnalystOpinions": 3, "recommendationKey": "buy"}}})
+    page.route("**/stock?**", lambda route: route.fulfill(status=200, content_type="application/json", body=stock_body(route.request.url.split("symbol=")[1])))
+    page.locator("#add-holding").click()
+    holding.locator('[name="updated"]').fill("")
+    holding.locator('[name="symbol"]').fill("FILL")
+    holding.locator('[name="broker"]').focus()
+    expect(holding.locator('[name="name"]')).to_have_value("FILL Company")
+    expect(holding.locator('[name="price"]')).to_have_value("107.08")
+    assert holding.locator('[name="updated"]').input_value()
+    holding.get_by_role("button", name="Cancel", exact=True).click()
+    # Adding the same ticker again merges into the existing holding as a recorded purchase.
+    page.locator("#add-holding").click()
+    for name, value in {"name":"Test ETF again", "symbol":"test", "broker":"Broker", "units":"1", "price":"100", "cost":"100"}.items():
+        holding.locator(f'[name="{name}"]').fill(value)
+    holding.get_by_role("button", name="Save investment").click()
+    expect(page.locator("#holding-dialog")).to_be_hidden()
+    expect(page.locator("#holding-rows tr")).to_have_count(1)
+    assert len(page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).contributions")) == 1
+    page.get_by_role("link", name="Analyse TEST").click()
+    expect(page.locator("#stock-detail")).to_contain_text("Price paid")
+    expect(page.locator("#stock-detail")).to_contain_text("3.5 units")
+    expect(page.locator("#stock-detail .stock-head h2")).to_contain_text("TEST Company")
+    expect(page.locator("#stock-detail .flag-list li")).not_to_have_count(0)
+    expect(page.locator("#stock-detail")).to_contain_text("above its 50-day and 200-day averages")
+    expect(page.locator("#stock-detail > article").first.locator("svg polyline")).to_have_count(3)
+    expect(page.locator("#stock-detail")).to_contain_text("Patterns")
+    expect(page.locator("#stock-detail")).to_contain_text("Average cost 100")
+    expect(page.locator("#benchmark-table tbody tr")).to_have_count(4)
+    expect(page.locator("#benchmark-table")).to_contain_text("VWCE.DE")
+    expect(page.locator("#benchmark-panel svg polyline")).to_have_count(2)
+    assert page.locator("#stock-detail details").get_attribute("open") is None
+    expect(page.locator("#stock-detail")).not_to_contain_text("Trend continues")
+    thesis = page.locator("#thesis-form")
+    thesis.locator('[name="why"]').fill("Durable demand <test>")
+    thesis.locator('[name="allocation"]').fill("25")
+    thesis.locator('[name="review"]').fill("28/02/2027")
+    thesis.get_by_role("button", name="Save thesis").click()
+    assert thesis.locator('[name="review"]').evaluate("(e) => [e.value, Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').get.call(e)]") == ["2027-02-28", "28/02/2027"]
+    expect(page.locator("#stock-detail")).to_contain_text("over limit")
+    thesis.locator('[name="note"]').fill("Review margins")
+    thesis.get_by_role("button", name="Add note", exact=True).click()
+    assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).theses.TEST.review") == "2027-02-28"
+    assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).theses.TEST.notes[0].text") == "Review margins"
+    before_preview = page.evaluate("localStorage.getItem('conta-v1')")
+    cash_text = page.locator("#trade-preview strong").last.inner_text()
+    page.locator('#trade-form [name="amount"]').fill("107.08")
+    expect(page.locator("#trade-preview strong").first).to_have_text("4.5")
+    assert page.locator("#trade-preview strong").last.inner_text() != cash_text
+    page.locator('#trade-form [name="side"]').select_option("sell")
+    expect(page.locator("#trade-preview strong").first).to_have_text("2.5")
+    page.locator('#trade-form [name="amount"]').fill("99999")
+    expect(page.locator("#trade-preview")).to_contain_text("Sale exceeds")
+    assert page.evaluate("localStorage.getItem('conta-v1')") == before_preview
+    page.locator('#benchmark-form [name="symbol"]').fill("test")
+    page.locator("#benchmark-form").get_by_role("button", name="Save benchmark").click()
+    expect(page.locator("#benchmark-table tbody tr").first.locator("td").last).to_have_text("0")
+    assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).benchmark") == "TEST"
+    page.locator("#watch-form [name=symbol]").fill("galp.ls")
+    page.locator("#watch-form").get_by_role("button", name="Watch").click()
+    expect(page.locator("#stock-detail .stock-head h2")).to_contain_text("GALP.LS Company")
+    expect(page.locator("#stock-rows tr")).to_have_count(2)
+    assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).watchlist") == ["GALP.LS"]
+    page.set_viewport_size({"width": 390, "height": 844})
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path="/tmp/conta-stocks-mobile.png", full_page=True)
+    page.set_viewport_size({"width": 1440, "height": 1100})
+    page.screenshot(path="/tmp/conta-stocks.png", full_page=True)
+    page.get_by_role("button", name="Stop watching GALP.LS").click()
+    expect(page.locator("#stock-rows tr")).to_have_count(1)
+    assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).watchlist") == []
+
     # The requested salary profile: age 24, first eligible year, meal card.
     page.locator('nav a[href="#accounts"]').click()
     for name, kind in [("Salary account", "Current"), ("Meal card", "Meal card")]:
@@ -230,8 +311,12 @@ with sync_playwright() as p:
     assert len(json.loads(backup)["holdings"]) == 1
     page.locator("#clear-data").click()
     page.locator("#restore").set_input_files({"name": "backup.json", "mimeType": "application/json", "buffer": backup})
-    expect(page.locator("#toast")).to_contain_text("Your workspace is ready")
-    assert len(page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).transactions")) == 2
+    # Clearing already shows the ready toast, so wait for the restored records themselves.
+    for _ in range(100):
+        if len(page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).transactions")) == 2:
+            break
+        page.wait_for_timeout(100)
+    assert len(page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).transactions")) == 2, page.locator("#toast").text_content()
     assert len(page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).holdings")) == 1
     assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).payroll.payments") == 12
     page.locator("#restore").set_input_files({"name": "bad.json", "mimeType": "application/json", "buffer": b'{"version": 1}'})
@@ -386,7 +471,8 @@ with sync_playwright() as p:
     expect(page.locator("#next-payday")).to_contain_text("Recorded")
     saved_salary = page.evaluate("JSON.parse(localStorage.getItem('conta-v1'))")
     assert [(t["salaryPart"], t["accountId"]) for t in saved_salary["transactions"]] == [("bank", saved_salary["payroll"]["bankAccountId"]), ("meal", saved_salary["payroll"]["mealAccountId"])]
-    salary = page.locator("#forecast-results tr").first.locator("td").first.inner_text()
+    # The overview shows the current month, which moves through the Sep–Dec plan as the year goes on.
+    salary = page.locator("#forecast-results tr").nth(date.today().month - 9).locator("td").first.inner_text()
     page.locator('nav a[href="#overview"]').click()
     expect(page.locator("#overview-expected")).to_contain_text("Salary to bank")
     expect(page.locator("#overview-expected")).to_contain_text(salary)
@@ -403,7 +489,9 @@ with sync_playwright() as p:
     expect(page.locator("#recurring-dialog")).not_to_be_visible()
     expect(page.locator("#recurring-list")).to_contain_text("Rent")
     page.locator("#post-recurring").click()
-    assert len(page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).transactions")) == 3
+    posted = page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).transactions")
+    # Salary parts, one rent, plus whichever loan instalments the calendar has already made due.
+    assert sum(t["description"] == "Rent" for t in posted) == 1 and len(posted) >= 3, [(t["description"], t["date"]) for t in posted]
     expect(page.locator("#post-recurring")).to_be_disabled()
     page.reload()
     expect(page.locator("#post-recurring")).to_be_disabled()
@@ -444,8 +532,12 @@ with sync_playwright() as p:
     assert json.loads(backup)["version"] == 5
     page.locator("#clear-data").click()
     page.locator("#restore").set_input_files({"name": "planning.json", "mimeType": "application/json", "buffer": backup})
-    saved = page.evaluate("JSON.parse(localStorage.getItem('conta-v1'))")
-    assert len(saved["loans"]) == 1 and len(saved["recurring"]) == 2 and len(saved["transactions"]) == 4
+    for _ in range(100):
+        saved = page.evaluate("JSON.parse(localStorage.getItem('conta-v1'))")
+        if saved["loans"]:
+            break
+        page.wait_for_timeout(100)
+    assert len(saved["loans"]) == 1 and len(saved["recurring"]) == 2 and len(saved["transactions"]) == len(posted) + 1
     assert saved["forecast"]["rows"][1]["gross"] == 140000
     assert not errors, errors
 
@@ -486,7 +578,8 @@ with sync_playwright() as p:
     expect(page.locator("#investment-plan-dialog")).to_be_hidden()
     expect(page.locator("#investment-projection")).to_contain_text("Projected end value")
     page.locator('nav a[href="#planning"]').click()
-    expect(page.locator("#planning-cash")).to_contain_text("950,00")
+    # One 50 EUR contribution per month since September is reserved until recorded.
+    expect(page.locator("#planning-cash")).to_contain_text(f"{1000 - 50 * (date.today().month - 8)},00")
     expect(page.locator("#payment-list")).to_contain_text("Test PPR")
     page.locator('nav a[href="#loans"]').click()
     page.locator("#add-loan").click()
@@ -504,7 +597,9 @@ with sync_playwright() as p:
         recurring.locator(f'[name="{name}"]').fill(value)
     recurring.locator('[name="accountId"]').select_option(label="Spending")
     recurring.get_by_role("button", name="Save monthly expense").click()
-    expect(page.locator("#planning-cash")).to_contain_text("840,00")
+    # Everything below starts in September 2026, so the calendar decides how many months are due.
+    due = date.today().month - 8
+    expect(page.locator("#planning-cash")).to_contain_text(f"Available cash{1000 - 160 * due},00")
     page.locator('nav a[href="#overview"]').click()
     expect(page.locator("#overview-expected-movements")).to_contain_text("Small loan")
     expect(page.locator("#overview-expected-movements")).to_contain_text("Scheduled loan payment")
@@ -512,27 +607,30 @@ with sync_playwright() as p:
     expect(page.locator("#transaction-rows")).to_contain_text("Small loan")
     expect(page.locator("#transaction-rows")).to_contain_text("Scheduled")
     page.locator('nav a[href="#planning"]').click()
-    page.locator('[data-payment-kind="loan"]').click()
+    page.locator('[data-payment-kind="loan"]').first.click()
     assert page.evaluate("JSON.parse(localStorage.getItem('conta-v1')).transactions.filter(t=>t.loanId).length") == 1
     page.locator('nav a[href="#overview"]').click()
+    page.locator("#overview-month").fill("09/2026")
+    page.locator("#overview-month").dispatch_event("change")
     expect(page.locator("#recent-list")).to_contain_text("Small loan")
     page.locator('nav a[href="#planning"]').click()
-    expect(page.locator("#planning-cash")).to_contain_text("990,00")
-    expect(page.locator("#planning-cash")).to_contain_text("840,00")
+    expect(page.locator("#planning-cash")).to_contain_text("Recorded cash990,00")
+    expect(page.locator("#planning-cash")).to_contain_text(f"Available cash{1000 - 160 * due},00")
     page.locator("#post-recurring").click()
     expect(page.locator("#post-recurring")).to_be_disabled()
-    expect(page.locator("#planning-cash")).to_contain_text("890,00")
-    page.locator('[data-payment-kind="investment"]').click()
+    expect(page.locator("#planning-cash")).to_contain_text(f"Recorded cash{1000 - 110 * due},00")
     contribution = page.locator("#contribution-form")
-    expect(page.locator("#contribution-units-label")).to_be_hidden()
-    contribution.locator('[name="price"]').fill("150")
-    contribution.get_by_role("button", name="Save contribution").click()
-    expect(page.locator("#contribution-dialog")).to_be_hidden()
-    expect(page.locator("#planning-cash")).to_contain_text("840,00")
+    for _ in range(due):
+        page.locator('[data-payment-kind="investment"]').first.click()
+        expect(page.locator("#contribution-units-label")).to_be_hidden()
+        contribution.locator('[name="price"]').fill("150")
+        contribution.get_by_role("button", name="Save contribution").click()
+        expect(page.locator("#contribution-dialog")).to_be_hidden()
+    expect(page.locator("#planning-cash")).to_contain_text(f"Available cash{1000 - 160 * due},00")
     expect(page.locator("#payment-list")).to_contain_text("No unpaid commitments")
     saved = page.evaluate("JSON.parse(localStorage.getItem('conta-v1'))")
-    assert len(saved["contributions"]) == 1 and saved["holdings"][0]["cost"] == 15000
-    assert len(saved["transactions"]) == 2
+    assert len(saved["contributions"]) == due and saved["holdings"][0]["cost"] == 10000 + 5000 * due
+    assert len(saved["transactions"]) == 2 * due
     page.reload()
     expect(page.locator("#payment-list")).to_contain_text("No unpaid commitments")
     expect(page.locator("#post-recurring")).to_be_disabled()
@@ -581,8 +679,12 @@ with sync_playwright() as p:
     backup = Path(investment_backup.value.path()).read_bytes()
     page.locator("#clear-data").click()
     page.locator("#restore").set_input_files({"name":"investments.json","mimeType":"application/json","buffer":backup})
-    restored = page.evaluate("JSON.parse(localStorage.getItem('conta-v1'))")
-    assert len(restored["investmentPlans"]) == 1 and len(restored["contributions"]) == 1
+    for _ in range(100):
+        restored = page.evaluate("JSON.parse(localStorage.getItem('conta-v1'))")
+        if restored["investmentPlans"]:
+            break
+        page.wait_for_timeout(100)
+    assert len(restored["investmentPlans"]) == 1 and len(restored["contributions"]) == due
     assert restored["forecast"]["payDay"] == 28
     # A later year must reach the inputs too, not only the validators.
     page.locator('nav a[href="#tax"]').click()

@@ -4,6 +4,7 @@ import {defaultForecast, validateForecast, projectYear, pendingPayments, cashPla
 import {BRACKETS, CATEGORIES, ASSET_TYPES, CARD_KIND, cents, defaultShortcuts, validDate, calculateTax, totals, monthlyOutflows, validateState, toCSV, csvCell, accountBalances, portfolio, trackedLoanDebt, loanOutstanding, netWorth, dateLabel, monthLabel, termLabel} from './core.mjs';
 import {calculatePayroll, annualTaxableEstimate, YOUTH_CAP} from './payroll.mjs';
 import {parseStatement,identifyImportRows,suggestCategory,rememberMerchant} from './statement.mjs';
+import {analyse,benchmarkComparison,SYMBOL} from './stocks.mjs';
 const $ = selector => document.querySelector(selector);
 const money = value => new Intl.NumberFormat('pt-PT', {style:'currency',currency:'EUR'}).format(value / 100);
 const percent = value => new Intl.NumberFormat('en-GB', {maximumFractionDigits:2}).format(value) + '%';
@@ -12,17 +13,19 @@ const escape = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;',
 // Native pickers format dates by browser locale; Conta always shows dd/mm/yyyy
 // (mm/yyyy for months). Code keeps reading and writing ISO through .value and FormData.
 const nativeValue=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
-for(const input of document.querySelectorAll('input[type=date],input[type=month]')) {
-  const month=input.type==='month',pattern=month?/^(\d{2})\/(\d{4})$/:/^(\d{2})\/(\d{2})\/(\d{4})$/;
+function shimDates(root=document){for(const input of root.querySelectorAll('input[type=date],input[type=month]')) {
+  const iso=input.value,month=input.type==='month',pattern=month?/^(\d{2})\/(\d{4})$/:/^(\d{2})\/(\d{2})\/(\d{4})$/;
   Object.assign(input,{type:'text',inputMode:'numeric',placeholder:month?'mm/yyyy':'dd/mm/yyyy',pattern:pattern.source.slice(1,-1),title:month?'mm/yyyy':'dd/mm/yyyy'});
   input.dataset.isoDate='';
   Object.defineProperty(input,'value',{
     get(){const m=pattern.exec(nativeValue.get.call(this).trim()),iso=m?m.slice(1).reverse().join('-'):'';return (month?validMonth(iso):validDate(iso))&&!(this.min&&iso<this.min)&&!(this.max&&iso>this.max)?iso:'';},
     set(iso){nativeValue.set.call(this,iso?String(iso).split('-').reverse().join('/'):'');this.setCustomValidity('');},
   });
+  input.value=iso;
   // type=text ignores min/max, so a typed value the getter rejects must fail validation too.
   input.addEventListener('input',()=>input.setCustomValidity(nativeValue.get.call(input).trim()&&!input.value?input.title:''));
-}
+}}
+shimDates();
 document.addEventListener('reset',event=>{for(const input of event.target.querySelectorAll('[data-iso-date]'))input.setCustomValidity('');},true);
 document.addEventListener('formdata',event=>{for(const input of event.target.querySelectorAll('[data-iso-date][name]'))event.formData.set(input.name,input.value);},true);
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
@@ -133,11 +136,177 @@ function resetState(next) {
     toast(next.demo?'Sample workspace loaded.':'Your workspace is ready.');
   } catch(error) { toast('Could not replace this workspace: '+error.message,true); }
 }
+// ---- Stocks: holdings with a ticker plus the watchlist, each with a full view.
+const stockCache=new Map();let stockSelected=null;
+const trackedSymbols=()=>[...new Set([...state.holdings.filter(h=>h.symbol&&h.valuation==='units').map(h=>h.symbol.toUpperCase()),...state.watchlist])].sort();
+const pct=v=>v===null||v===undefined||!Number.isFinite(v)?'—':`${v>=0?'+':'−'}${Math.abs(v*100).toFixed(1)}%`;
+const signClass=v=>Number.isFinite(v)?v<0?'negative':'positive':'';
+const num=(v,digits=2)=>Number.isFinite(v)?v.toLocaleString('en-GB',{maximumFractionDigits:digits}):'—';
+const big=v=>!Number.isFinite(v)?'—':Math.abs(v)>=1e9?`${num(v/1e9,1)} B`:Math.abs(v)>=1e6?`${num(v/1e6,1)} M`:num(v,0);
+const stamp=v=>Number.isFinite(v)?dateLabel(new Date(v*1000).toISOString().slice(0,10)):'—';
+function priceLabel(v,currency){
+  if(!Number.isFinite(v))return '—';
+  try{return new Intl.NumberFormat('en-GB',{style:'currency',currency,maximumFractionDigits:v<10?3:2}).format(v);}catch{return `${num(v)} ${escape(currency||'')}`;}
+}
+async function loadStock(symbol,force=false){
+  if(!force&&stockCache.has(symbol))return;
+  stockCache.set(symbol,{loading:true});
+  try{
+    const response=await fetch('/stock?symbol='+encodeURIComponent(symbol),{cache:'no-store'});
+    const body=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(body.error||`Server answered ${response.status}`);
+    stockCache.set(symbol,{report:body,metrics:analyse(body)});
+  }catch(error){stockCache.set(symbol,{error:error.message});}
+  if(!$('#stocks').hidden)renderStocks(true);
+}
+function renderStocks(preserve=false){
+  const draft=preserve&&$('#stock-detail').dataset.symbol===stockSelected?[...document.querySelectorAll('#thesis-form [name],#trade-form [name]')].map(e=>[e.form.id,e.name,e.value]):[];
+  const symbols=trackedSymbols();
+  if(document.activeElement!==$('#benchmark-form [name=symbol]'))$('#benchmark-form [name=symbol]').value=state.benchmark;
+  $('#stocks-empty').hidden=symbols.length>0;
+  $('#stock-rows').innerHTML=symbols.map(s=>{
+    const c=stockCache.get(s)||{},m=c.metrics,r=c.report,day=r?r.price/r.previousClose-1:null;
+    const cells=c.error?`<td colspan="5"><small class="cell-note">${escape(c.error)}</small></td>`:!m?'<td colspan="5"><small class="cell-note">Loading…</small></td>':`<td>${priceLabel(r.price,r.currency)}</td><td class="${signClass(day)}">${pct(day)}</td><td class="${signClass(m.returns['1m'])}">${pct(m.returns['1m'])}</td><td class="${signClass(m.returns['1y'])}">${pct(m.returns['1y'])}</td><td><span class="pill">${m.trend.label}</span></td>`;
+    return `<tr class="${s===stockSelected?'current':''}"><td><strong>${escape(s)}</strong><small class="cell-note">${escape(r?.name||state.holdings.find(h=>h.symbol?.toUpperCase()===s)?.name||'')}</small></td>${cells}<td><a class="icon-button" href="#stocks/${encodeURIComponent(s)}">Open</a></td></tr>`;
+  }).join('');
+  for(const s of new Set([...symbols,stockSelected,...(stockSelected?[state.benchmark]:[])].filter(Boolean)))loadStock(s);
+  const detail=$('#stock-detail');
+  detail.hidden=!stockSelected;
+  if(!stockSelected)return;
+  const c=stockCache.get(stockSelected);
+  if(!c||c.loading)detail.innerHTML=`<article class="panel"><p class="empty">Loading ${escape(stockSelected)}…</p></article>`;
+  else if(c.error)detail.innerHTML=`<article class="panel"><p class="empty">${escape(stockSelected)}: ${escape(c.error)}</p>${removeButton(stockSelected)}</article>`;
+  else detail.innerHTML=stockView(c.report,c.metrics);
+  detail.dataset.symbol=stockSelected;shimDates(detail);
+  for(const [id,name,value] of draft){const e=$('#'+id)?.elements.namedItem(name);if(e)e.value=value;}
+  updateTradePreview();
+}
+const removeButton=s=>state.watchlist.includes(s)?`<p><button class="button secondary" data-unwatch="${escape(s)}">Stop watching ${escape(s)}</button></p>`:'';
+function stockChart(r,m){
+  const n=Math.min(r.dates.length,252),dates=r.dates.slice(-n),series=[['Close',r.closes.slice(-n),'#2b7a4b'],['50-day average',m.sma50Series.slice(-n),'#b4731f'],['200-day average',m.sma200Series.slice(-n),'#4f78b3']];
+  const values=series.flatMap(([,v])=>v).filter(v=>v!==null),low=Math.min(...values),high=Math.max(...values),span=Math.max(high-low,high*0.01||1);
+  const x=i=>55+i/(n-1)*470,y=v=>20+(high-v)/span*130;
+  const line=(v,color,width)=>`<polyline points="${v.map((p,i)=>p===null?null:`${x(i).toFixed(1)},${y(p).toFixed(1)}`).filter(Boolean).join(' ')}" fill="none" stroke="${color}" stroke-width="${width}" stroke-linejoin="round"/>`;
+  const hits=dates.map((d,i)=>`<rect x="${(x(i)-235/n).toFixed(1)}" y="0" width="${(470/n).toFixed(2)}" height="170" fill="transparent"><title>${dateLabel(d)}: ${priceLabel(r.closes.at(-n+i),r.currency)}</title></rect>`).join('');
+  return `<svg class="wealth-svg" viewBox="0 0 560 195" role="img" aria-label="Closing price of ${escape(r.symbol)} from ${dateLabel(dates[0])} to ${dateLabel(dates.at(-1))}, with 50-day and 200-day averages"><line x1="55" x2="530" y1="20" y2="20" stroke="#e6eadf"/><line x1="55" x2="530" y1="150" y2="150" stroke="#e6eadf"/><text x="0" y="24">${num(high)}</text><text x="0" y="154">${num(low)}</text>${series.map(([,v,color],i)=>line(v,color,i?1.5:2)).join('')}${hits}<text x="55" y="184">${dateLabel(dates[0])}</text><text x="460" y="184">${dateLabel(dates.at(-1))}</text></svg><ul class="chart-legend">${series.map(([label,,color])=>`<li><i style="color:${color}"></i>${label}</li>`).join('')}</ul>`;
+}
+const FUNDAMENTALS=[['Market cap','price.marketCap',big],['Trailing P/E','summaryDetail.trailingPE',num],['Forward P/E','summaryDetail.forwardPE',num],['PEG ratio','defaultKeyStatistics.pegRatio',num],['Price / book','defaultKeyStatistics.priceToBook',num],['Price / sales','summaryDetail.priceToSalesTrailing12Months',num],['Dividend yield','summaryDetail.dividendYield',pct],['Payout ratio','summaryDetail.payoutRatio',pct],['Beta','summaryDetail.beta',num],['Profit margin','financialData.profitMargins',pct],['Operating margin','financialData.operatingMargins',pct],['Revenue growth','financialData.revenueGrowth',pct],['Earnings growth','financialData.earningsGrowth',pct],['Return on equity','financialData.returnOnEquity',pct],['Debt / equity','financialData.debtToEquity',num],['Free cash flow','financialData.freeCashflow',big],['Average volume (3 m)','price.averageDailyVolume3Month',big],['Fund assets','defaultKeyStatistics.totalAssets',big],['Fund family','defaultKeyStatistics.fundFamily',escape],['Next earnings','calendarEvents.earnings.earningsDate',stamp],['Ex-dividend date','summaryDetail.exDividendDate',stamp]];
+const dig=(o,path)=>path.split('.').reduce((v,k)=>Array.isArray(v?.[k])?v[k][0]:v?.[k],o);
+function stockView(r,m){
+  const f=r.fundamentals||{},fin=f.financialData||{},rec=f.recommendationTrend?.trend?.[0];
+  const day=r.price/r.previousClose-1,holdings=state.holdings.filter(h=>h.symbol?.toUpperCase()===r.symbol&&h.valuation==='units');
+  const tiles=[['Price',priceLabel(r.price,r.currency),`${pct(day)} today · ${dateLabel(r.updated)}`],['1-year return',pct(m.returns['1y']),`${pct(m.returns.ytd)} this year`],['52-week range',`${num(m.low52)} – ${num(m.high52)}`,`${pct(m.fromHigh)} from the high`],['Volatility',pct(m.vol1y).slice(1),`${pct(m.maxDrawdown)} deepest fall this year`]];
+  const fundamentals=FUNDAMENTALS.map(([label,path,fmt])=>[label,dig(f,path),fmt]).filter(([,v])=>v!==null&&v!==undefined&&v!=='');
+  const euro=r.currency==='EUR';
+  const position=holdings.map(h=>{const value=euro?Math.round(h.units*r.price*100):null;return `<div><small>${escape(h.name)} · ${escape(h.broker)}</small><strong>${num(h.units,8)} units</strong><small>${h.units>0?`Average cost ${num(h.cost/100/h.units)} · `:''}Cost ${money(h.cost)}${value!==null?` · now ${money(value)} (${pct(value/h.cost-1)})`:' · value in EUR not available for this listing'}</small></div>`;}).join('');
+  // Every recorded purchase of this stock, each valued at today's price. The app keeps one average cost; there are no tax lots or sales.
+  const lots=state.contributions.filter(c=>holdings.some(h=>h.id===c.holdingId)&&c.units>0).sort((a,b)=>b.date.localeCompare(a.date));
+  const purchases=lots.length?`<div class="table-wrap spaced"><table><thead><tr><th>Bought</th><th>Units</th><th>Price paid</th><th>Paid</th><th>Worth now</th><th>Gain / loss</th></tr></thead><tbody>${lots.map(c=>{const now=euro?Math.round(c.units*r.price*100):null;return `<tr><td>${dateLabel(c.date)}</td><td>${num(c.units,8)}</td><td>${num(c.amount/100/c.units)}</td><td>${money(c.amount)}</td><td>${now===null?'—':money(now)}</td><td class="${now===null?'':signClass(now-c.amount)}">${now===null?'—':`${money(now-c.amount)} (${pct(now/c.amount-1)})`}</td></tr>`;}).join('')}</tbody></table></div>`:'';
+  const patternLine=p=>{const h=p.history,when=p.last.daysAgo<=15?`completed ${p.last.daysAgo===0?'today':p.last.daysAgo===1?'yesterday':p.last.daysAgo+' trading days ago'}`:`last seen ${dateLabel(p.last.date)}`;
+    const what=h.count>=3?`After its ${h.count} completions in two years, the price a month later was higher ${h.up} times (median ${pct(h.median)}).`:h.count?`Only ${h.count} completion${h.count===1?'':'s'} with a month of history since: too few to judge what follows.`:'Too recent to know what followed.';
+    return `<li data-tone="${p.direction==='bullish'?'positive':'negative'}"><span class="dot"></span><span><strong>${p.name}</strong> · ${p.direction}, ${when}. ${what}</span></li>`;};
+  const rows=['1w','1m','3m','6m','ytd','1y'].map(k=>`<td class="${signClass(m.returns[k])}">${pct(m.returns[k])}</td>`).join('');
+  return `<article class="panel"><div class="stock-head"><div><p class="eyebrow">${escape(r.type||'')} · ${escape(r.exchange||'')} · ${escape(r.currency||'')}</p><h2>${escape(r.name)} <span class="pill">${escape(r.symbol)}</span></h2><small class="muted">Delayed quote · ${dateLabel(r.updated)}</small></div><div><div class="stock-price">${priceLabel(r.price,r.currency)}</div><span class="${signClass(day)}">${pct(day)} today</span></div></div>
+  <div class="metric-grid">${tiles.map(([l,v,s])=>`<div><small>${l}</small><strong>${v}</strong><small>${s}</small></div>`).join('')}</div>
+  ${position?`<h3 class="spaced">Your position</h3><div class="metric-grid">${position}</div>${purchases}`:''}
+  <h3 class="spaced">One year of prices</h3>${stockChart(r,m)}
+  <div class="table-wrap spaced"><table><thead><tr><th>1 week</th><th>1 month</th><th>3 months</th><th>6 months</th><th>This year</th><th>1 year</th></tr></thead><tbody><tr>${rows}</tr></tbody></table></div>
+  <p class="source-note">Returns use dividend-adjusted closes. Volatility is the annualised standard deviation of daily moves.</p></article>
+  ${thesisView()}${holdings.length?positionRisk(r):''}${benchmarkView(r)}
+  <div class="middle-grid spaced"><article class="panel"><div class="panel-heading"><div><h2>How it has been moving</h2><p>Observations from the price series, not advice.</p></div></div><ul class="flag-list">${m.flags.map(fl=>`<li data-tone="${fl.tone}"><span class="dot"></span><span>${escape(fl.text)}</span></li>`).join('')}</ul>
+  <div class="metric-grid spaced"><div><small>RSI (14)</small><strong>${num(m.rsi,0)}</strong></div><div><small>50-day average</small><strong>${num(m.sma50)}</strong></div><div><small>200-day average</small><strong>${num(m.sma200)}</strong></div><div><small>Volatility, last month</small><strong>${pct(m.vol30).slice(1)}</strong></div><div><small>Support</small><strong>${num(m.support)}</strong></div><div><small>Resistance</small><strong>${num(m.resistance)}</strong></div><div><small>Volume vs 3 months</small><strong>${m.volumeRatio===null?'—':num(m.volumeRatio,1)+'×'}</strong></div><div><small>Drawdown now</small><strong>${pct(m.currentDrawdown)}</strong></div></div></article>
+  <article class="panel"><div class="panel-heading"><div><h2>Volatility sensitivity</h2><p>Model percentiles from measured volatility, not probabilities of future outcomes.</p></div></div><div class="table-wrap"><table><thead><tr><th>Horizon</th><th>Low (10th pct)</th><th>Median</th><th>High (90th pct)</th></tr></thead><tbody>${m.scenarios.map(s=>`<tr><td style="white-space:nowrap">${s.horizon}</td><td class="negative">${num(s.bear)}</td><td>${num(s.base)}</td><td class="positive">${num(s.bull)}</td></tr>`).join('')}</tbody></table></div>
+  ${Number.isFinite(fin.targetMeanPrice)?`<p class="scope-note">Analyst 12-month targets via Yahoo: ${num(fin.targetLowPrice)} low · ${num(fin.targetMeanPrice)} mean · ${num(fin.targetHighPrice)} high from ${num(fin.numberOfAnalystOpinions,0)} analysts${fin.recommendationKey?`; consensus "${escape(fin.recommendationKey.replace('_',' '))}"`:''}${rec?` (${num(rec.strongBuy+rec.buy,0)} buy, ${num(rec.hold,0)} hold, ${num(rec.sell+rec.strongSell,0)} sell ratings)`:''}.</p>`:''}
+  <p class="source-note">Bands assume no drift and that past volatility persists; real markets jump. These are model sensitivities, not forecasts.</p></article></div>
+  <article class="panel spaced"><div class="panel-heading"><div><h2>Patterns</h2></div></div><details><summary>Show historical patterns</summary><p>Named chart shapes that completed, with what this stock did in the month after each one. Read each hit rate against this stock's own habit: in this period any month was up ${m.patterns.baseline.count?num(m.patterns.baseline.up/m.patterns.baseline.count*100,0)+'% of the time':'—'}.</p>${m.patterns.length?`<ul class="flag-list">${m.patterns.map(patternLine).join('')}</ul>`:'<p class="empty">No named patterns completed in the last two years.</p>'}<p class="source-note">Definitions are strict: double tops and bottoms, head and shoulders, 60-day range breaks, 2% gaps, engulfing, hammer and shooting-star candles, and average crosses. A pattern counts on the day it completes, never earlier.</p></details></article>
+  <article class="panel spaced"><div class="panel-heading"><div><h2>Fundamentals</h2><p>Company and fund data via Yahoo Finance${fundamentals.length?'':' — none available for this ticker'}.</p></div></div><div class="metric-grid">${fundamentals.map(([l,v,fmt])=>`<div><small>${l}</small><strong>${fmt(v)}</strong></div>`).join('')}</div>${removeButton(r.symbol)}</article>`;
+}
+const thesis=()=>state.theses[stockSelected]||{why:'',horizon:'',wrong:'',allocation:null,review:'',notes:[]};
+function thesisView(){
+  const t=thesis();
+  return `<article class="panel spaced"><h2>My thesis</h2><form id="thesis-form" class="record-form">
+  ${[['why','Why I own or want it'],['horizon','Intended horizon'],['wrong','What would prove me wrong']].map(([key,label])=>`<label>${label}<textarea name="${key}" maxlength="500">${escape(t[key])}</textarea></label>`).join('')}
+  <div class="form-row"><label>Maximum share of my portfolio (%)<input name="allocation" type="number" min="0" max="100" step="any" value="${t.allocation??''}"></label><label>Next review<input name="review" type="date" min="1900-01-01" max="2100-12-31" value="${escape(t.review)}"></label></div>
+  <label>Add note<input name="note" maxlength="500" placeholder="A dated note on what changed or what you decided"></label><div class="button-row"><button class="button primary">Save thesis</button><button class="button secondary" name="action" value="note">Add note</button></div><p class="error" role="alert"></p></form>
+  <ul class="flag-list">${[...t.notes].reverse().sort((a,b)=>b.date.localeCompare(a.date)).map(n=>`<li><span>${dateLabel(n.date)} · ${escape(n.text)}</span></li>`).join('')}</ul></article>`;
+}
+function livePosition(r){
+  const holdings=state.holdings.map(h=>h.symbol?.toUpperCase()===stockSelected&&h.valuation==='units'?{...h,price:r.price}:h);
+  const p=portfolio(holdings),positions=p.positions.filter(h=>h.symbol?.toUpperCase()===stockSelected&&h.valuation==='units');
+  return {value:positions.reduce((s,h)=>s+h.value,0),units:positions.reduce((s,h)=>s+h.units,0),total:p.value,worth:netWorth({...state,holdings},today()).total};
+}
+function positionRisk(r){
+  if(r.currency!=='EUR')return '<article class="panel spaced"><h2>Position risk</h2><p>The comparison needs a EUR listing.</p></article>';
+  const p=livePosition(r),share=p.total>0?p.value/p.total:null,limit=thesis().allocation;
+  return `<article class="panel spaced"><h2>Position risk</h2><div class="metric-grid"><div><small>Share of portfolio</small><strong>${pct(share)}</strong><small>${limit===null?'No allocation limit':`Limit ${num(limit)}%${share!==null&&share*100>limit?' · over limit':''}`}</small></div><div><small>Share of financial net worth</small><strong>${pct(p.worth>0?p.value/p.worth:null)}</strong><small>Unavailable when net worth is zero or negative.</small></div></div>
+  <p class="scope-note">This position uses the delayed live EUR quote; other holdings use saved valuations. The allocation limit applies to portfolio value.</p>
+  <div class="table-wrap"><table><thead><tr><th>Position shock</th><th>Euro loss</th></tr></thead><tbody>${[10,20,40].map(n=>`<tr><td>−${n}%</td><td>${money(-Math.round(p.value*n/100))}</td></tr>`).join('')}</tbody></table></div>
+  <h3 class="spaced">Trade preview</h3><form id="trade-form" class="filters"><label>Trade<select name="side"><option value="buy">Buy</option><option value="sell">Sell</option></select></label><label>Amount (€)<input name="amount" type="number" min="0" max="1000000000" step="0.01" value="0" required></label></form><div id="trade-preview" class="stats-grid" aria-live="polite"></div>
+  <p class="source-note">Calculation only; nothing is saved. Available cash after commitments through ${monthLabel(today().slice(0,7))}; fees and taxes excluded.</p></article>`;
+}
+function updateTradePreview(){
+  const f=$('#trade-form'),r=stockCache.get(stockSelected)?.report;if(!f||!r)return;
+  const out=$('#trade-preview');
+  try{
+    if(!(r.price>0))throw new Error('A positive live price is needed.');
+    const p=livePosition(r),amount=cents(f.elements.amount.value),delta=f.elements.side.value==='sell'?-amount:amount;
+    if(delta<0&&amount>p.value)throw new Error('Sale exceeds this position.');
+    const units=Math.max(0,p.units+delta/100/r.price),total=p.total+delta,available=cashPlan(state,today().slice(0,7),today()).available-delta;
+    out.innerHTML=[['Resulting units',num(units,8)],['New portfolio share',pct(total>0?(p.value+delta)/total:null)],['Available cash after commitments',money(available)]].map(([label,value])=>`<div><span>${label}</span><strong>${value}</strong></div>`).join('');
+  }catch(error){out.textContent=error.message;}
+}
+function benchmarkView(r){
+  const c=stockCache.get(state.benchmark),b=c?.report;
+  let body;
+  if(!b)body=`<p>${c?.error?escape(c.error):'Loading benchmark…'}</p>`;
+  else if(!r.currency||r.currency!==b.currency)body='<p>The comparison needs matching currencies.</p>';
+  else{
+    const m=benchmarkComparison(r,b),n=m.dates.length;
+    if(n<2)body='<p>Not enough shared price history.</p>';
+    else{
+      const series=[[stockSelected,m.stock,'#2b7a4b'],[state.benchmark,m.benchmark,'#4f78b3']],values=series.flatMap(([,v])=>v),low=Math.min(...values),high=Math.max(...values),span=Math.max(high-low,1);
+      body=`<svg class="wealth-svg" viewBox="0 0 560 195" role="img" aria-label="Stock and benchmark rebased to 100"><line x1="55" x2="530" y1="150" y2="150" stroke="#e6eadf"/><text x="0" y="24">${num(high)}</text><text x="0" y="154">${num(low)}</text>${series.map(([,v,color])=>`<polyline points="${v.map((p,i)=>`${(55+i/(n-1)*470).toFixed(1)},${(20+(high-p)/span*130).toFixed(1)}`).join(' ')}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`).join('')}<text x="55" y="184">${dateLabel(m.dates[0])}</text><text x="460" y="184">${dateLabel(m.dates.at(-1))}</text></svg>
+      <ul class="chart-legend">${series.map(([label,,color])=>`<li><i style="color:${color}"></i>${escape(label)}</li>`).join('')}</ul>
+      <div class="table-wrap"><table id="benchmark-table"><thead><tr><th>Period</th><th>Matched dates</th><th>${escape(stockSelected)}</th><th>${escape(state.benchmark)}</th><th>Difference (pp)</th></tr></thead><tbody>${m.returns.map(v=>`<tr><td>${v.period}</td><td>${v.start?dateLabel(v.start)+' – '+dateLabel(v.end):'Insufficient history'}</td><td>${pct(v.stock)}</td><td>${pct(v.benchmark)}</td><td>${v.difference===null?'—':num(v.difference*100,1)}</td></tr>`).join('')}</tbody></table></div>
+      <p class="source-note">Dividend-adjusted closes on shared trading dates. Chart starts at 100 within the common one-year window; returns use the last shared close on or before each period boundary.</p>`;
+    }
+  }
+  return `<article id="benchmark-panel" class="panel spaced"><h2>Benchmark comparison</h2>${body}</article>`;
+}
+$('#stock-detail').addEventListener('input',event=>{if(event.target.closest('#trade-form'))updateTradePreview();});
+$('#stock-detail').addEventListener('submit',event=>{
+  event.preventDefault();const f=event.target;if(f.id!=='thesis-form')return;
+  const v=Object.fromEntries(new FormData(f)),notes=[...thesis().notes];f.querySelector('.error').textContent='';
+  if(event.submitter?.value==='note'){
+    if(!v.note.trim()||notes.length>=100){f.querySelector('.error').textContent=notes.length>=100?'A thesis can hold at most 100 notes.':'Enter a note.';return;}
+    notes.push({date:today(),text:v.note.trim()});
+  }
+  const t={why:v.why,horizon:v.horizon,wrong:v.wrong,allocation:v.allocation===''?null:Number(v.allocation),review:v.review,notes};
+  if(save({...state,theses:{...state.theses,[stockSelected]:t}}))renderStocks();
+});
+$('#benchmark-form').addEventListener('submit',event=>{
+  event.preventDefault();const symbol=event.currentTarget.elements.symbol.value.trim().toUpperCase();
+  if(!SYMBOL.test(symbol)){$('#stocks-error').textContent='Enter a valid benchmark ticker.';return;}
+  if(save({...state,benchmark:symbol})){$('#stocks-error').textContent='';renderStocks();}
+});
+$('#watch-form').addEventListener('submit',event=>{
+  event.preventDefault();const f=event.currentTarget,symbol=f.elements.symbol.value.trim().toUpperCase();$('#stocks-error').textContent='';
+  if(!SYMBOL.test(symbol)){$('#stocks-error').textContent='Enter a market ticker such as GALP.LS, VWCE.DE or AAPL.';return;}
+  if(!state.watchlist.includes(symbol)&&!save({...state,watchlist:[...state.watchlist,symbol]}))return;
+  f.reset();location.hash=`#stocks/${encodeURIComponent(symbol)}`;render();
+});
+$('#stock-detail').addEventListener('click',event=>{
+  const b=event.target.closest('[data-unwatch]');if(!b)return;
+  if(save({...state,watchlist:state.watchlist.filter(s=>s!==b.dataset.unwatch)})){stockCache.delete(b.dataset.unwatch);location.hash='#stocks';render();}
+});
+$('#refresh-stocks').addEventListener('click',()=>{for(const s of new Set([...trackedSymbols(),stockSelected,state.benchmark].filter(Boolean)))loadStock(s,true);renderStocks();});
 function route() {
-  const page=['overview','transactions','accounts','portfolio','planning','loans','tax','settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
+  const [hashPage,param]=location.hash.slice(1).split('/');
+  const page=['overview','transactions','accounts','portfolio','stocks','planning','loans','tax','settings'].includes(hashPage) ? hashPage : 'overview';
   document.querySelectorAll('.page').forEach(node=>node.hidden=node.id!==page);
   document.querySelectorAll('nav a').forEach(node=>{node.classList.toggle('active',node.dataset.page===page); if(node.dataset.page===page) node.setAttribute('aria-current','page'); else node.removeAttribute('aria-current');});
-  document.title=`${{overview:'Overview',transactions:'Transactions',accounts:'Accounts',portfolio:'Portfolio',planning:'Planning',loans:'Loans',tax:'IRS calculator',settings:'Your data'}[page]} · Conta`;
+  document.title=`${{overview:'Overview',transactions:'Transactions',accounts:'Accounts',portfolio:'Portfolio',stocks:'Stocks',planning:'Planning',loans:'Loans',tax:'IRS calculator',settings:'Your data'}[page]} · Conta`;
+  if(page==='stocks'){stockSelected=param?decodeURIComponent(param).toUpperCase():null;renderStocks();}
 }
 const icons={Salary:'↙','Other income':'↙',Housing:'⌂',Groceries:'▧',Fuel:'⛽',Transport:'↔',Dining:'♧',Shopping:'◇',Office:'▤',Tech:'⌘',Health:'＋',Leisure:'♫',Utilities:'ϟ',Untracked:'?',Other:'·'};
 const trackedLoanBalance=()=>trackedLoanDebt(state,today());
@@ -342,7 +511,7 @@ function renderWealth() {
   $('#portfolio-count').textContent=`${state.holdings.length} holding${state.holdings.length===1?'':'s'} · ${automatic} automatic`;
   $('#refresh-prices').disabled=refreshingPrices||!automatic;
   $('#holdings-empty').hidden=state.holdings.length>0;
-  $('#holding-rows').innerHTML=investments.positions.map(h=>`<tr><td><strong>${escape(h.symbol||h.name)}</strong><small class="cell-note">${escape(h.name)}<br>${escape(h.broker)} · ${escape(h.kind)}</small></td><td>${h.valuation==='balance'?'—':h.units.toLocaleString('en-GB',{maximumFractionDigits:8})}</td><td>${h.valuation==='balance'?'Statement total':h.price.toLocaleString('pt-PT',{minimumFractionDigits:2,maximumFractionDigits:6})+' €'}</td><td>${money(h.value)}</td><td class="${h.gain<0?'negative':'positive'}">${money(h.gain)}<small class="cell-note">${h.returnPct===null?'No cost basis':percent(h.returnPct)}</small></td><td>${dateLabel(h.updated)}${h.autoPrice?'<small class="cell-note">Automatic</small>':Date.now()-Date.parse(h.updated+'T23:59:59')>7*86400000?'<small class="cell-note">Update price</small>':''}</td><td><button class="icon-button" data-holding-edit="${escape(h.id)}" aria-label="Edit ${escape(h.symbol||h.name)}">Edit</button><button class="icon-button" data-holding-delete="${escape(h.id)}" aria-label="Delete ${escape(h.symbol||h.name)}">Delete</button></td></tr>`).join('');
+  $('#holding-rows').innerHTML=investments.positions.map(h=>`<tr><td><strong>${escape(h.symbol||h.name)}</strong><small class="cell-note">${escape(h.name)}<br>${escape(h.broker)} · ${escape(h.kind)}</small></td><td>${h.valuation==='balance'?'—':h.units.toLocaleString('en-GB',{maximumFractionDigits:8})}</td><td>${h.valuation==='balance'?'Statement total':h.price.toLocaleString('pt-PT',{minimumFractionDigits:2,maximumFractionDigits:6})+' €'}</td><td>${money(h.value)}</td><td class="${h.gain<0?'negative':'positive'}">${money(h.gain)}<small class="cell-note">${h.returnPct===null?'No cost basis':percent(h.returnPct)}</small></td><td>${dateLabel(h.updated)}${h.autoPrice?'<small class="cell-note">Automatic</small>':Date.now()-Date.parse(h.updated+'T23:59:59')>7*86400000?'<small class="cell-note">Update price</small>':''}</td><td>${h.symbol?`<a class="icon-button" href="#stocks/${encodeURIComponent(h.symbol)}" aria-label="Analyse ${escape(h.symbol)}">Analyse</a>`:``}<button class="icon-button" data-holding-edit="${escape(h.id)}" aria-label="Edit ${escape(h.symbol||h.name)}">Edit</button><button class="icon-button" data-holding-delete="${escape(h.id)}" aria-label="Delete ${escape(h.symbol||h.name)}">Delete</button></td></tr>`).join('');
   const colors=['#345f43','#96ae72','#cfdaa7','#e3bb95','#9baeb1','#bbb39a'];
   const allocations=ASSET_TYPES.map(kind=>({kind,value:investments.positions.filter(h=>h.kind===kind).reduce((sum,h)=>sum+h.value,0)})).filter(a=>a.value>0);
   $('#allocation').innerHTML=allocations.map((a,i)=>`<div class="allocation-row"><div><span>${a.kind}</span><strong>${percent(a.value/investments.value*100)}</strong></div><div class="allocation-track"><div style="width:${a.value/investments.value*100}%;background:${colors[i]}"></div></div><small>${money(a.value)}</small></div>`).join('')||'<p class="empty">Your asset mix will appear here.</p>';
@@ -428,11 +597,32 @@ $('#transfer-form').addEventListener('submit',event=>{
 });
 $('#transfer-rows').addEventListener('click',event=>{const button=event.target.closest('[data-transfer-delete]');if(button&&confirm('Delete this transfer and reverse its effect on both balances?')&&save({...state,transfers:state.transfers.filter(t=>t.id!==button.dataset.transferDelete)}))render();});
 $('#add-holding').addEventListener('click',()=>openHolding());
+let holdingLookup=0;
+$('#holding-form').addEventListener('reset',()=>holdingLookup++);
+$('#holding-form').elements.symbol.addEventListener('input',()=>holdingLookup++);
+$('#holding-form').elements.symbol.addEventListener('blur',async()=>{
+  const f=$('#holding-form'),e=f.elements,symbol=e.symbol.value.trim().toUpperCase(),request=++holdingLookup;
+  if(!symbol||(e.name.value&&e.price.value))return;
+  try{
+    const response=await fetch('/stock?symbol='+encodeURIComponent(symbol)),r=await response.json();
+    if(!response.ok||request!==holdingLookup||e.symbol.value.trim().toUpperCase()!==symbol)return;
+    if(!e.name.value&&typeof r.name==='string')e.name.value=r.name.slice(0,100);
+    if(!e.price.value&&e.valuation.value==='units'&&r.currency==='EUR'&&Number.isFinite(r.price)&&r.price>0)e.price.value=String(Number(r.price.toFixed(6)));
+    if(!e.updated.value&&validDate(r.updated))e.updated.value=r.updated;
+  }catch{} // Market data is optional; manual entry remains available.
+});
 $('#holding-form').addEventListener('submit',event=>{
   event.preventDefault();const f=event.currentTarget;try{const v=Object.fromEntries(new FormData(f));
     const holding={...v,id:v.id||crypto.randomUUID(),name:v.name.trim(),symbol:v.symbol.trim().toUpperCase(),broker:v.broker.trim(),valuation:v.valuation,autoPrice:v.valuation==='units'&&!!v.autoPrice,units:v.valuation==='balance'?1:Number(v.units),price:Number(v.price),cost:cents(v.cost)};
     if(v.updated>today())throw new Error('Price date cannot be in the future.');
     if(v.id&&!state.holdings.some(h=>h.id===v.id))throw new Error('This holding was removed in another tab.');
+    // A second holding for a ticker already held is a purchase of the first, not a new position.
+    const twin=!v.id&&holding.symbol&&holding.valuation==='units'?state.holdings.find(h=>h.symbol.toUpperCase()===holding.symbol&&h.valuation==='units'):null;
+    if(twin){
+      if(!(holding.units>0)||!holding.cost)throw new Error(`You already hold ${holding.symbol} as ${twin.name}. Enter the units and cost of this purchase to add it there.`);
+      commitRecord(f,recordContribution(state,{id:crypto.randomUUID(),holdingId:twin.id,accountId:null,date:v.updated,amount:holding.cost,units:holding.units,price:holding.price}));
+      return toast(`Added ${num(holding.units,8)} units to ${twin.name}; no cash was moved.`);
+    }
     commitRecord(f,{...state,holdings:v.id?state.holdings.map(h=>h.id===v.id?holding:h):[...state.holdings,holding]});
   }catch(error){f.querySelector('.error').textContent=error.message;}
 });

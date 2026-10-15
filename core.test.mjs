@@ -519,3 +519,22 @@ test('optional finance fields roundtrip, preserve old asset snapshots and reject
   assert.equal(validateState({...withSecondAccount,transactions:[imported,{...imported,id:'same-statement-other-account',accountId:'other'}]}).transactions.length,2);
   assert.throws(()=>validateState({...s,transactions:[{...imported,importKey:undefined}]}),/imported transaction/);
 });
+test('the watchlist keeps unique valid tickers and migrates in empty',()=>{
+  const s=cashWorkspace();
+  assert.deepEqual(validateState(s).watchlist,[]);
+  assert.deepEqual(validateState({...s,watchlist:['GALP.LS','^GSPC']}).watchlist,['GALP.LS','^GSPC']);
+  for(const bad of [['galp ls'],['GALP.LS','GALP.LS'],'GALP.LS',[''],[1]])assert.throws(()=>validateState({...s,watchlist:bad}),/watchlist/);
+});
+
+test('theses and benchmark migrate, validate and round-trip independently',()=>{
+  const s=cashWorkspace(),t={why:'Long-term demand',horizon:'Ten years',wrong:'Margins decline',allocation:15.5,review:'2027-02-28',notes:[{date:'2026-10-15',text:'First review'}]};
+  assert.deepEqual(validateState({...s,theses:undefined}).theses,{});
+  assert.equal(validateState({...s,benchmark:undefined}).benchmark,'VWCE.DE');
+  const saved=validateState({...s,theses:{TEST:t},benchmark:'^GSPC'});
+  assert.deepEqual(saved.theses,{TEST:t});
+  assert.deepEqual(validateState(JSON.parse(JSON.stringify(saved))),saved);
+  assert.notEqual(saved.theses.TEST.notes,t.notes);
+  for(const benchmark of ['',null,1,'vwce.de','A B','A'.repeat(21)])assert.throws(()=>validateState({...s,benchmark}),/benchmark/);
+  for(const theses of [null,[],{test:t},{TEST:null},{TEST:{...t,why:1}},{TEST:{...t,horizon:'x'.repeat(501)}},{TEST:{...t,wrong:null}},{TEST:{...t,allocation:'15'}},{TEST:{...t,allocation:-1}},{TEST:{...t,allocation:101}},{TEST:{...t,allocation:NaN}},{TEST:{...t,review:'2026-02-30'}},{TEST:{...t,notes:{}}},{TEST:{...t,notes:Array(101).fill(t.notes[0])}},{TEST:{...t,notes:[{date:'15/10/2026',text:'x'}]}},{TEST:{...t,notes:[{date:'2026-10-15',text:'x'.repeat(501)}]}},{TEST:{...t,extra:true}}])assert.throws(()=>validateState({...s,theses}),/theses/);
+  for(const allocation of [null,0,100])assert.equal(validateState({...s,theses:{TEST:{...t,why:'x'.repeat(500),allocation,review:'',notes:Array(100).fill(t.notes[0])}}}).theses.TEST.allocation,allocation);
+});

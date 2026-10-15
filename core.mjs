@@ -3,6 +3,7 @@ import {amortize, validateLoan, validMonth, validDate} from './loans.mjs';
 import {defaultForecast, validateForecast} from './planning.mjs';
 import {defaultPayroll, validatePayroll} from './payroll.mjs';
 import {normalizeMerchant} from './statement.mjs';
+import {SYMBOL} from './stocks.mjs';
 // Mainland Portugal, income year 2026. Verified 2026-09-18.
 // CIRS articles 68, 68-A and 69; official sources linked in the UI and README.
 export const BRACKETS = [
@@ -91,6 +92,16 @@ export function validateState(data) {
     ruleIds.add(r.id);
   }
   for(const l of loans){if(l.accountId!==null&&!accountIds.has(l.accountId))throw new Error('Loan refers to a missing account.');if(loanIds.has(l.id))throw new Error('Duplicate loan.');loanIds.add(l.id);}
+  const watchlist=data.watchlist===undefined?[]:data.watchlist;
+  if(!Array.isArray(watchlist)||watchlist.length>50||!watchlist.every(s=>typeof s==='string'&&SYMBOL.test(s))||new Set(watchlist).size!==watchlist.length)throw new Error('Invalid watchlist.');
+  const benchmark=data.benchmark===undefined?'VWCE.DE':data.benchmark;
+  if(typeof benchmark!=='string'||!SYMBOL.test(benchmark))throw new Error('Invalid benchmark.');
+  const theses=data.theses===undefined?{}:data.theses;
+  const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v),text=v=>typeof v==='string'&&v.length<=500;
+  if(!object(theses))throw new Error('Invalid theses.');
+  for(const [symbol,t] of Object.entries(theses)){
+    if(!SYMBOL.test(symbol)||!object(t)||Object.keys(t).length!==6||!['why','horizon','wrong'].every(k=>text(t[k]))||!(t.allocation===null||Number.isFinite(t.allocation)&&t.allocation>=0&&t.allocation<=100)||!(t.review===''||validDate(t.review))||!Array.isArray(t.notes)||t.notes.length>100||!t.notes.every(n=>object(n)&&Object.keys(n).length===2&&validDate(n.date)&&text(n.text)))throw new Error('Invalid theses.');
+  }
   const cashBuffer=data.cashBuffer===undefined?0:data.cashBuffer;
   if(!validMoney(cashBuffer))throw new Error('Invalid cash buffer.');
   const firstCashAccount=accounts.find(a=>a.kind!==CARD_KIND);
@@ -157,7 +168,7 @@ export function validateState(data) {
       ...(data.version>=3&&salaryPart?{salaryPart,occurrence}:{}),
       ...(importSource!==undefined?{importSource,importKey}:{})};
   };
-  return {version:5,demo:data.demo,cashBuffer,expenseShortcuts:expenseShortcuts.map(({id,name,category,accountId})=>({id,name,category,accountId})),merchantRules:merchantRules.map(({merchant,category})=>({merchant:normalizeMerchant(merchant),category})),
+  return {version:5,demo:data.demo,cashBuffer,benchmark,theses:Object.fromEntries(Object.entries(theses).map(([s,{why,horizon,wrong,allocation,review,notes}])=>[s,{why,horizon,wrong,allocation,review,notes:notes.map(({date,text})=>({date,text}))}])),watchlist:[...watchlist],expenseShortcuts:expenseShortcuts.map(({id,name,category,accountId})=>({id,name,category,accountId})),merchantRules:merchantRules.map(({merchant,category})=>({merchant:normalizeMerchant(merchant),category})),
     investmentPlans:investmentPlans.map(validateInvestmentPlan),contributions:contributions.map(({id,holdingId,accountId,date,amount,units,planId,occurrence})=>({id,holdingId,accountId,date,amount,units,...(planId?{planId,occurrence}:{})})),
     recurring:recurring.map(({id,description,category,amount,accountId,start,end,day,enabled,posted})=>({id,description,category,amount,accountId,start,end,day,enabled,posted:[...posted]})),
     loans:loans.map(validateLoan),forecast,

@@ -25,6 +25,7 @@ Conta brings cash accounts, transactions, salary planning, Portuguese tax estima
 | **Track the full picture** | Keep cash accounts, investments, PPRs, loans and net worth together. |
 | **Keep control of the data** | Save locally, export JSON backups and retain thirty previous workspace versions. |
 | **Refresh market holdings** | Opt in to delayed EUR quotes for exchange-traded stocks and ETFs. |
+| **Study each stock** | Price history, fundamentals, dated theses, position risk and trade previews, matched benchmark returns, historical patterns and volatility sensitivity for holdings and a watchlist. |
 
 ## Quick start
 
@@ -55,11 +56,11 @@ The first launch displays labelled sample records. Choose **Start my finances** 
 - Bank PDF import: extract selectable PDF text locally with Poppler's `pdftotext`, review rows and duplicates, then import chosen entries. Scanned/image-only statements need OCR and are not supported. Uncertain direction or ambiguous rows require manual review; merchant category rules are optional and local.
 - Expense shortcuts and merchant rules speed up frequent entries. Weekly account reconciliation records an adjustment and date; safe-to-spend subtracts unpaid commitments and your cash buffer. Net worth history includes tracked debt and marks older valuations as stale.
 - History: save daily cash/portfolio valuations; view their timeline and delete snapshots. Deposits, withdrawals and changes in holdings affect these values, so the history is not a time-weighted investment return.
-- Backups: JSON export/restore includes accounts, transfers, transactions, holdings, snapshots, both calculator settings, loans, monthly expense rules, salary plans, investment plans, contribution history, shortcuts, merchant rules and the cash buffer. Version-1 through version-4 backups migrate without changing transaction amounts or dates.
+- Backups: JSON export/restore includes accounts, transfers, transactions, holdings, snapshots, both calculator settings, loans, monthly expense rules, salary plans, investment plans, contribution history, shortcuts, merchant rules, the watchlist, per-ticker theses and dated notes, benchmark ticker and the cash buffer. Version-1 through version-4 backups migrate without changing transaction amounts or dates.
 
 Dates are shown as dd/mm/yyyy throughout. CSV exports keep ISO `yyyy-mm-dd`, which spreadsheets parse the same way in every locale. Loan terms are shown in years and months alongside the payment count.
 
-Bank accounts and statement-valued products are tracked manually. Exchange-traded holdings can opt into delayed quotes by using a market ticker such as `GALP.LS`, `SAN.MC` or `VWCE.DE`; automatic conversion from non-EUR listings is intentionally excluded. Quote refresh sends only those tickers to Yahoo Finance through the local server. No bank login or trading connection is used. Editing holdings does not post a cash movement or calculate realised gains. Record/reconcile cash changes separately.
+Bank accounts and statement-valued products are tracked manually. Exchange-traded holdings can opt into delayed quotes by using a market ticker such as `GALP.LS`, `SAN.MC` or `VWCE.DE`; automatic conversion from non-EUR listings is intentionally excluded. Quote refresh sends only those tickers to Yahoo Finance through the local server. No bank login or trading connection is used. Editing holdings does not post a cash movement or calculate realised gains. Record/reconcile cash changes separately. Adding a holding whose ticker you already hold records it as a purchase of the existing holding instead of a second position.
 
 ## Monthly salary, meals and first-year benefits
 
@@ -163,12 +164,12 @@ Verified 18 September 2026. These rules apply to **2026 income**, not 2025 retur
 
 ## Data and checks
 
-Financial records live in `conta-data.json` (schema version 5), written atomically with the previous thirty versions in `history/`; browser localStorage under `conta-v1` is a recovery cache. Cash amounts use integer cents. No account or cloud sync is required. Keep copies of the data file or JSON backups from **Your data**. Fonts are bundled. The only optional outbound requests are ticker-only market quote lookups for holdings where automatic prices are enabled. The local launcher binds only to loopback and serves an explicit allowlist of public files. PDF text extraction requires Poppler's `pdftotext`; the PDF stays on this computer.
+Financial records live in `conta-data.json` (schema version 5), written atomically with the previous thirty versions in `history/`; browser localStorage under `conta-v1` is a recovery cache. Cash amounts use integer cents. No account or cloud sync is required. Keep copies of the data file or JSON backups from **Your data**. Fonts are bundled. The only optional outbound requests go to Yahoo Finance: ticker-only quote lookups for holdings where automatic prices are enabled, and two-year price history and company data for holding ticker autofill and, while the Stocks page is open, each tracked ticker and the selected benchmark (this one uses a Yahoo session cookie the server fetches; nothing about you is sent). The local launcher binds only to loopback and serves an explicit allowlist of public files. PDF text extraction requires Poppler's `pdftotext`; the PDF stays on this computer.
 
 Run financial logic and migration checks:
 
 ```sh
-node core.test.mjs
+node --test core.test.mjs && node statement.test.mjs && node stocks.test.mjs && python3 statement_server_test.py
 ```
 
 Optional browser checks start their own server and use a temporary workspace:
