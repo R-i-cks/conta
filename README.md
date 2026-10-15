@@ -25,7 +25,7 @@ Conta brings cash accounts, transactions, salary planning, Portuguese tax estima
 | **Track the full picture** | Keep cash accounts, investments, PPRs, loans and net worth together. |
 | **Keep control of the data** | Save locally, export JSON backups and retain thirty previous workspace versions. |
 | **Refresh market holdings** | Opt in to delayed EUR quotes for exchange-traded stocks and ETFs. |
-| **Study each stock** | Price history, fundamentals, dated theses, position risk and trade previews, matched benchmark returns, historical patterns and volatility sensitivity for holdings and a watchlist. |
+| **Study each stock** | Price history, fundamentals, dated theses, position risk and trade previews, matched benchmark returns, historical patterns, volatility sensitivity and a colour-rated metric guide with stated thresholds, for holdings and a watchlist. |
 
 ## Quick start
 

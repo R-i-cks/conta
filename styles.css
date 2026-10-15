@@ -36,5 +36,8 @@
 .metric-grid small{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
 .metric-grid strong{font-size:15px}
 a.icon-button{text-decoration:none;display:inline-block}
+.grade{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;white-space:nowrap}
+.grade[data-grade=good]{background:#deecae;color:#1c4b3c}.grade[data-grade=warn]{background:#f6e3b4;color:#6b4f0b}.grade[data-grade=bad]{background:#f3d2c7;color:#7a2e1a}
+.grade-legend{display:flex;gap:6px}.guide-table td{vertical-align:top}.guide-table small{display:block;min-width:220px;max-width:360px;line-height:1.45;white-space:normal}
 textarea{width:100%;min-height:72px;padding:11px 12px;border:1px solid #dfe4d9;background:#fff;color:var(--ink);border-radius:7px;margin-top:8px;font:inherit;resize:vertical}
 textarea:focus-visible{outline:3px solid #699e4c;outline-offset:4px}

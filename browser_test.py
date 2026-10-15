@@ -220,6 +220,9 @@ with sync_playwright() as p:
     expect(page.locator("#stock-detail")).to_contain_text("above its 50-day and 200-day averages")
     expect(page.locator("#stock-detail > article").first.locator("svg polyline")).to_have_count(3)
     expect(page.locator("#stock-detail")).to_contain_text("Patterns")
+    expect(page.locator("#stock-detail .guide-table tbody tr")).not_to_have_count(0)
+    expect(page.locator("#stock-detail .guide-table")).to_contain_text("Trailing P/E")
+    assert page.locator('#stock-detail .guide-table .grade[data-grade="good"]').count() > 0
     expect(page.locator("#stock-detail")).to_contain_text("Average cost 100")
     expect(page.locator("#benchmark-table tbody tr")).to_have_count(4)
     expect(page.locator("#benchmark-table")).to_contain_text("VWCE.DE")

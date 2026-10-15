@@ -79,3 +79,15 @@ assert.equal(short.returns[3].difference,null);
 assert.deepEqual(benchmarkComparison(a,{dates:['2030-01-01'],adjusted:[1]}).dates,[]);
 assert.deepEqual(benchmarkComparison(a,{dates:a.dates,adjusted:a.dates.map(()=>0)}).dates,[]);
 assert.ok(m.flags.every(f=>!/often|no discount|usually|will happen/i.test(f.text)));
+
+import {evaluate, GUIDE} from './stocks.mjs';
+const fund={summaryDetail:{trailingPE:12,dividendYield:0.08,beta:1.5},financialData:{debtToEquity:120,freeCashflow:-5,recommendationMean:2}};
+const rows=evaluate(m,fund,{share:0.3,limit:null});
+const tone=name=>rows.find(r=>r.name===name)?.tone;
+assert.equal(tone('Trailing P/E'),'good'); assert.equal(tone('Dividend yield'),'bad'); assert.equal(tone('Beta'),'bad'); assert.equal(tone('Debt / equity'),'bad');
+assert.equal(tone('Free cash flow'),'bad'); assert.equal(tone('Analyst consensus'),'good'); assert.equal(tone('Share of your portfolio'),'bad');
+assert.equal(evaluate(m,fund,{share:0.3,limit:40}).find(r=>r.name==='Share of your portfolio').tone,'good','the thesis limit wins');
+assert.equal(tone('Trend versus averages'),'good'); assert.equal(tone('RSI (14)'),'warn','RSI 100 is outside the band');
+assert.equal(rows.find(r=>r.name==='Forward P/E'),undefined,'missing fundamentals leave no row');
+assert.ok(GUIDE.every(([,,,{rule},what])=>rule&&what.length>20));
+console.log('guide ok');

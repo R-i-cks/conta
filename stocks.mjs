@@ -225,3 +225,42 @@ export function patterns(stock,horizon=21){
   found.baseline=history(closes.map((_,i)=>i),adjusted,horizon);
   return found;
 }
+
+// ---- Metric guide: one line on what each number means and a rule-of-thumb
+// rating against stated thresholds. Thresholds are generic; the UI says so.
+const below=(good,warn,unit='')=>({grade:v=>v<=good?'good':v<=warn?'warn':'bad',rule:`Good ≤ ${good}${unit} · Watch ${good}–${warn}${unit} · Poor > ${warn}${unit}`});
+const above=(good,warn,unit='')=>({grade:v=>v>=good?'good':v>=warn?'warn':'bad',rule:`Good ≥ ${good}${unit} · Watch ${warn}–${good}${unit} · Poor < ${warn}${unit}`});
+const between=(lo,hi,unit='')=>({grade:v=>v>=lo&&v<=hi?'good':'warn',rule:`Typical ${lo}–${hi}${unit} · Watch outside`});
+const f=(path)=>(m,fund)=>path.split('.').reduce((v,k)=>v?.[k],fund)??null;
+const pctOf=v=>v===null||v===undefined?null:v*100;
+export const GUIDE=[
+  ['1-year return','pct',m=>pctOf(m.returns['1y']),above(10,0,'%'),'Price change over twelve months including dividends. Compare with the benchmark, not with zero.'],
+  ['Volatility','pct',m=>pctOf(m.vol1y),below(20,40,'%'),'How much the price swings in a year. High volatility means bigger losses on bad days as well as bigger gains.'],
+  ['Drawdown from peak','pct',m=>pctOf(m.currentDrawdown),above(-10,-25,'%'),'How far the price sits below its 52-week high. Deep drawdowns need large rises to recover.'],
+  ['RSI (14)','num',m=>m.rsi,between(30,70),'Momentum over two weeks. Above 70 the rise has been fast; below 30 the fall has been fast. Neither says what happens next.'],
+  ['Trend versus averages','text',m=>m.sma50===null||m.sma200===null?null:m.price>m.sma50&&m.price>m.sma200?'Above both':m.price<m.sma50&&m.price<m.sma200?'Below both':'Between',{grade:v=>v==='Above both'?'good':v==='Between'?'warn':'bad',rule:'Good above both · Watch between · Poor below both'},'Where the price sits against its 50-day and 200-day averages, the usual definition of an uptrend or downtrend.'],
+  ['Trailing P/E','x',f('summaryDetail.trailingPE'),{grade:v=>v<0?'bad':v<=15?'good':v<=25?'warn':'bad',rule:'Good ≤ 15 · Watch 15–25 · Poor > 25 or negative'},'Price divided by last year\'s earnings per share: how many years of profit you pay for. Negative means the company lost money.'],
+  ['Forward P/E','x',f('summaryDetail.forwardPE'),{grade:v=>v<0?'bad':v<=15?'good':v<=25?'warn':'bad',rule:'Good ≤ 15 · Watch 15–25 · Poor > 25 or negative'},'The same ratio using analysts\' estimated earnings for next year. Estimates are often optimistic.'],
+  ['PEG ratio','x',f('defaultKeyStatistics.pegRatio'),below(1,2),'P/E divided by expected growth. Around 1 means you pay a fair price for the growth; well above 2 means growth is expensive.'],
+  ['Price / book','x',f('defaultKeyStatistics.priceToBook'),below(1.5,3),'Price against the accounting value of the company\'s assets. Meaningful for banks and industry, less so for software and brands.'],
+  ['Price / sales','x',f('summaryDetail.priceToSalesTrailing12Months'),below(2,5),'Market value against yearly revenue. Useful when earnings are negative or lumpy.'],
+  ['Dividend yield','pct',(m,fund)=>pctOf(f('summaryDetail.dividendYield')(m,fund)),{grade:v=>v>=2&&v<=6?'good':v<2?'warn':'bad',rule:'Good 2–6% · Watch below 2% · Poor above 6%, often a falling price'},'Yearly dividend as a share of the price. A very high yield usually means the price fell or the dividend is at risk.'],
+  ['Payout ratio','pct',(m,fund)=>pctOf(f('summaryDetail.payoutRatio')(m,fund)),below(60,80,'%'),'Share of profit paid out as dividends. Above 80% leaves little room if profits dip.'],
+  ['Beta','num',f('summaryDetail.beta'),{grade:v=>v<=0.8?'good':v<=1.2?'warn':'bad',rule:'Good ≤ 0.8 · Watch 0.8–1.2 · Poor > 1.2'},'How much the stock moves with the market. 1.5 means it tends to fall 15% when the market falls 10%.'],
+  ['Profit margin','pct',(m,fund)=>pctOf(f('financialData.profitMargins')(m,fund)),above(10,5,'%'),'Net profit as a share of revenue. Thin margins leave little cushion against cost rises.'],
+  ['Operating margin','pct',(m,fund)=>pctOf(f('financialData.operatingMargins')(m,fund)),above(15,5,'%'),'Profit from the core business before interest and tax, as a share of revenue.'],
+  ['Revenue growth','pct',(m,fund)=>pctOf(f('financialData.revenueGrowth')(m,fund)),above(10,0,'%'),'Sales growth against the same period a year earlier.'],
+  ['Earnings growth','pct',(m,fund)=>pctOf(f('financialData.earningsGrowth')(m,fund)),above(10,0,'%'),'Profit growth against the same period a year earlier. One-off items distort it.'],
+  ['Return on equity','pct',(m,fund)=>pctOf(f('financialData.returnOnEquity')(m,fund)),above(15,8,'%'),'Profit earned on shareholders\' capital. High debt inflates it.'],
+  ['Debt / equity','pct',f('financialData.debtToEquity'),below(50,100,'%'),'Borrowings against shareholders\' capital. Banks and utilities run higher by nature.'],
+  ['Current ratio','x',f('financialData.currentRatio'),above(1.5,1),'Short-term assets against short-term debts. Below 1 the company may struggle to pay bills this year.'],
+  ['Free cash flow','money',f('financialData.freeCashflow'),{grade:v=>v>0?'good':'bad',rule:'Good positive · Poor negative'},'Cash left after running and investing in the business. Profits without cash are a warning.'],
+  ['Analyst consensus','num',f('financialData.recommendationMean'),below(2.5,3.5),'Average analyst rating from 1 (strong buy) to 5 (strong sell), via Yahoo. Analysts lean optimistic.'],
+  ['Share of your portfolio','pct',(m,fund,pos)=>pos?.share===undefined||pos.share===null?null:pos.share*100,{grade:(v,pos)=>pos?.limit!==null&&pos?.limit!==undefined?(v<=pos.limit?'good':'bad'):v<=10?'good':v<=25?'warn':'bad',rule:'Your thesis limit if set; otherwise Good ≤ 10% · Watch 10–25% · Poor > 25%'},'How much of your invested money rides on this one stock. Concentration is the risk you control directly.'],
+];
+export function evaluate(m,fundamentals,position=null){
+  return GUIDE.map(([name,kind,read,{grade,rule},what])=>{
+    const value=read(m,fundamentals||{},position);
+    return value===null||value===undefined||typeof value==='number'&&!Number.isFinite(value)?null:{name,kind,value,tone:grade(value,position),rule,what};
+  }).filter(Boolean);
+}

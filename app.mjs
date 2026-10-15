@@ -4,7 +4,7 @@ import {defaultForecast, validateForecast, projectYear, pendingPayments, cashPla
 import {BRACKETS, CATEGORIES, ASSET_TYPES, CARD_KIND, cents, defaultShortcuts, validDate, calculateTax, totals, monthlyOutflows, validateState, toCSV, csvCell, accountBalances, portfolio, trackedLoanDebt, loanOutstanding, netWorth, dateLabel, monthLabel, termLabel} from './core.mjs';
 import {calculatePayroll, annualTaxableEstimate, YOUTH_CAP} from './payroll.mjs';
 import {parseStatement,identifyImportRows,suggestCategory,rememberMerchant} from './statement.mjs';
-import {analyse,benchmarkComparison,SYMBOL} from './stocks.mjs';
+import {analyse,benchmarkComparison,evaluate,SYMBOL} from './stocks.mjs';
 const $ = selector => document.querySelector(selector);
 const money = value => new Intl.NumberFormat('pt-PT', {style:'currency',currency:'EUR'}).format(value / 100);
 const percent = value => new Intl.NumberFormat('en-GB', {maximumFractionDigits:2}).format(value) + '%';
@@ -219,7 +219,17 @@ function stockView(r,m){
   ${Number.isFinite(fin.targetMeanPrice)?`<p class="scope-note">Analyst 12-month targets via Yahoo: ${num(fin.targetLowPrice)} low · ${num(fin.targetMeanPrice)} mean · ${num(fin.targetHighPrice)} high from ${num(fin.numberOfAnalystOpinions,0)} analysts${fin.recommendationKey?`; consensus "${escape(fin.recommendationKey.replace('_',' '))}"`:''}${rec?` (${num(rec.strongBuy+rec.buy,0)} buy, ${num(rec.hold,0)} hold, ${num(rec.sell+rec.strongSell,0)} sell ratings)`:''}.</p>`:''}
   <p class="source-note">Bands assume no drift and that past volatility persists; real markets jump. These are model sensitivities, not forecasts.</p></article></div>
   <article class="panel spaced"><div class="panel-heading"><div><h2>Patterns</h2></div></div><details><summary>Show historical patterns</summary><p>Named chart shapes that completed, with what this stock did in the month after each one. Read each hit rate against this stock's own habit: in this period any month was up ${m.patterns.baseline.count?num(m.patterns.baseline.up/m.patterns.baseline.count*100,0)+'% of the time':'—'}.</p>${m.patterns.length?`<ul class="flag-list">${m.patterns.map(patternLine).join('')}</ul>`:'<p class="empty">No named patterns completed in the last two years.</p>'}<p class="source-note">Definitions are strict: double tops and bottoms, head and shoulders, 60-day range breaks, 2% gaps, engulfing, hammer and shooting-star candles, and average crosses. A pattern counts on the day it completes, never earlier.</p></details></article>
-  <article class="panel spaced"><div class="panel-heading"><div><h2>Fundamentals</h2><p>Company and fund data via Yahoo Finance${fundamentals.length?'':' — none available for this ticker'}.</p></div></div><div class="metric-grid">${fundamentals.map(([l,v,fmt])=>`<div><small>${l}</small><strong>${fmt(v)}</strong></div>`).join('')}</div>${removeButton(r.symbol)}</article>`;
+  <article class="panel spaced"><div class="panel-heading"><div><h2>Fundamentals</h2><p>Company and fund data via Yahoo Finance${fundamentals.length?'':' — none available for this ticker'}.</p></div></div><div class="metric-grid">${fundamentals.map(([l,v,fmt])=>`<div><small>${l}</small><strong>${fmt(v)}</strong></div>`).join('')}</div></article>
+  ${metricGuide(r,m,holdings)}<article class="panel spaced">${removeButton(r.symbol)||'<p class="muted">This stock comes from your holdings.</p>'}</article>`;
+}
+const GRADE={good:'Good',warn:'Watch',bad:'Poor'};
+function metricGuide(r,m,holdings){
+  const pos=holdings.length&&r.currency==='EUR'?(()=>{const p=livePosition(r);return {share:p.total>0?p.value/p.total:null,limit:thesis().allocation};})():null;
+  const show=row=>row.kind==='pct'?pct(row.value/100):row.kind==='x'?num(row.value)+'×':row.kind==='money'?big(row.value):row.kind==='num'?num(row.value):escape(row.value);
+  const rows=evaluate(m,r.fundamentals,pos);
+  return `<article class="panel spaced"><div class="panel-heading"><div><h2>Metric guide</h2><p>What each number means and how it reads against common rules of thumb.</p></div><span class="grade-legend"><span class="grade" data-grade="good">Good</span><span class="grade" data-grade="warn">Watch</span><span class="grade" data-grade="bad">Poor</span></span></div>
+  <div class="table-wrap"><table class="guide-table"><thead><tr><th>Metric</th><th>Value</th><th>Rating</th><th>Thresholds</th><th>What it means</th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong>${row.name}</strong></td><td>${show(row)}</td><td><span class="grade" data-grade="${row.tone}">${GRADE[row.tone]}</span></td><td><small>${row.rule}</small></td><td><small>${row.what}</small></td></tr>`).join('')}</tbody></table></div>
+  <p class="source-note">Thresholds are generic rules of thumb for a typical listed company. Banks, insurers, utilities and fast-growing companies read differently, and ETFs have no company metrics. A green row is not a buy signal; the ratings describe the number, not the decision.</p></article>`;
 }
 const thesis=()=>state.theses[stockSelected]||{why:'',horizon:'',wrong:'',allocation:null,review:'',notes:[]};
 function thesisView(){
