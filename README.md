@@ -194,3 +194,7 @@ uv run --with playwright python browser_test.py
 GitHub Actions runs all of the above on every push (`.github/workflows/checks.yml`) and publishes the app as a static preview on GitHub Pages (`.github/workflows/pages.yml`, after enabling Pages with source "GitHub Actions" once). The preview has no app server, so changes stay in that browser and quotes or PDF import are unavailable there.
 
 Checks cover annual and monthly bracket boundaries, SS, IRS Jovem caps/eligibility, meal-card/cash treatment, 12/14 schedules, transfers, portfolio valuation, migration, backup validation, annuity/principal conservation, one-off and recurring overpayments, fee caps/waivers, duplicate-proof expense and salary posting, year-end forecasts and exports. Browser checks use an isolated workspace and cover desktop/mobile layout and the complete user flows.
+
+## Licence
+
+Copyright © 2026 Ricardo A. Conta is free software under the [GNU Affero General Public License v3.0](LICENSE). You may use, study, change and share it; if you run a modified copy as a service for others, you must publish your changes under the same licence.
