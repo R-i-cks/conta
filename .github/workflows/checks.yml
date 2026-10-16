@@ -19,7 +19,9 @@ jobs:
           node statement.test.mjs
           node stocks.test.mjs
       - name: Server tests
-        run: python3 statement_server_test.py
+        run: |
+          sudo apt-get install -y poppler-utils
+          python3 statement_server_test.py
       - name: Browser tests
         run: |
           pip install playwright
